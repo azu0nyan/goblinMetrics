@@ -304,6 +304,43 @@ pub async fn requests_top_urls(
     Ok(Json(data))
 }
 
+// ── /api/requests/latency ───────────────────────────────────────────────────
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct LatencyPoint {
+    pub bucket_ts: i64,
+    pub avg_ms:    f64,
+}
+
+pub async fn requests_latency(
+    State(pool): State<AppState>,
+    Query(q): Query<RangeQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let (from, to) = q.resolve();
+    let bucket_ms  = q.bucket_ms();
+    let host       = q.host_filter();
+
+    let sql = format!(
+        "SELECT (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
+                AVG(response_time_ms) AS avg_ms
+         FROM requests
+         WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
+           AND method != ''
+         GROUP BY bucket_ts
+         ORDER BY bucket_ts ASC"
+    );
+
+    let rows: Vec<LatencyPoint> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .bind(host)
+        .fetch_all(&pool)
+        .await?;
+
+    Ok(Json(rows))
+}
+
 // ── Error type ───────────────────────────────────────────────────────────────
 
 pub struct AppError(anyhow::Error);

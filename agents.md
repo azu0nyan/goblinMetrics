@@ -154,3 +154,85 @@ GET /api/requests/top_urls?hours=1&host=goblin.geno.su     → filtered top URLs
 ### Bug fixed during deploy
 
 `read_line` (requires valid UTF-8) crashed on log lines containing raw TLS handshake bytes logged by nginx when bots hit port 80 with HTTPS clients. Fixed by switching to `read_until(b'\n', &mut Vec<u8>)` and decoding with `from_utf8_lossy`.
+
+---
+
+## Iteration 4 — Latency, Tooltips, Status Toggle, Method Chart
+**Date:** 2026-05-10  
+**Status:** ✅ Complete
+
+### What changed
+
+**nginx logging (`deploy/nginx-logging.conf`)**  
+Added `"request_time":$request_time` (bare float, seconds) as the last field in `goblin_json`.
+
+**Database schema**  
+Two new columns on `requests`:
+- `method TEXT DEFAULT ''` — HTTP verb extracted from the `request` field
+- `response_time_ms REAL DEFAULT 0` — `nginx $request_time * 1000`
+
+Migration strategy identical to iteration 3:
+- `migrations/001_init.sql` — columns included for fresh installs; index omitted
+- `migrations/003_add_latency.sql` — `ALTER TABLE` for existing installs (deploy runs with `2>/dev/null || true`)
+- `run_migrations()` in both binaries — inline `ALTER TABLE` + `CREATE INDEX IF NOT EXISTS idx_req_method`
+
+**log-ingestor (`crates/log-ingestor/`)**  
+- `parser.rs`: `RawEntry` gains `request_time: f64` (`#[serde(default)]`); `LogEntry` gains `method: String` and `response_time_ms: f64`; new `extract_method()` filters to known HTTP verbs only (non-verb tokens → `""`, handles garbage from TLS bots)
+- `db.rs`: INSERT now writes 9 columns including `method` and `response_time_ms`
+
+**web-ui (`crates/web-ui/src/`)**  
+- `api.rs`: new `LatencyPoint { bucket_ts, method, avg_ms }` and `requests_latency_by_method` handler — groups by `(bucket_ts, method)`, filters `method != ''`
+- `main.rs`: route `GET /api/requests/latency_by_method`; 2 new tests
+
+**Frontend (`crates/web-ui/src/static/index.html`)**  
+- **Hover tooltips**: `lineChart()` and `barChart()` accept a `suffix` parameter (`'%'`, `' req'`, `''`); tooltip label callbacks format as `"Label: value[suffix]"`. Stacked charts use `tooltip: { mode: 'index' }` showing all series at a cursor position
+- **Status chart toggle**: `▬`/`∿` button on the status codes card, same pattern as RPS toggle. New `stackedLineChart()` factory for line mode. Toggle preserves current datasets and persists to localStorage
+- **Latency chart**: New `Response Time by Method` card between status codes and top URLs. `multiLineChart()` factory with ms y-axis label. `buildLatencyDatasets()` builds one line per method (GET=blue, POST=green, PUT=yellow, DELETE=red, PATCH=cyan, HEAD=purple). Null-fills missing (bucket, method) pairs; `spanGaps: false`
+
+### API additions
+
+```
+GET /api/requests/latency_by_method?hours=1&bucket=minute&host=goblin.geno.su
+→ [{"bucket_ts":..., "method":"GET", "avg_ms":4.0}, ...]
+```
+
+### Tests
+
+22 tests across all three crates — all pass.
+
+### Bug fixed during deploy
+
+The `response_time_ms > 0` filter in the latency query excluded nginx 301 redirects (processed in ~0ms, `request_time: 0.000`). Fixed by removing the filter — `method != ''` alone is sufficient to skip rows with no latency data.
+
+---
+
+## Iteration 5 — Status Toggle Fix, Split Latency Metrics
+**Date:** 2026-05-10  
+**Status:** ✅ Complete
+
+### What changed
+
+**Bug fix — status codes line mode**  
+`buildStatusDatasets()` set `borderWidth: 0` (fine for bars but invisible lines). Changed to `borderWidth: 1.5` and added `pointRadius: 0`, `tension: 0.3`, `fill: true` so datasets render correctly in both bar and stacked-line modes.
+
+**Latency split into two distinct metrics**  
+Per user request, the single "Response Time by Method" chart was replaced with two specialized charts:
+
+1. **Avg Backend Latency (nginx logs)** — single line, overall avg from nginx `$request_time`, respects the global host filter.
+2. **Dashboard API Latency (UI-measured)** — multi-line chart, measured client-side via `performance.now()` around each `fetchJSON` call. One line per dashboard API endpoint (`metrics`, `requests/timeseries`, etc.). Rolling window of 60 timings per endpoint. Manual clear button (⟲).
+
+**API changes (`crates/web-ui/src/api.rs` + `main.rs`)**  
+- Removed `requests_latency_by_method` handler / route
+- Added `requests_latency` handler (single avg per bucket) + `/api/requests/latency` route
+- `LatencyPoint` struct shrunk: `{ bucket_ts, avg_ms }` (no `method`)
+- Tests renamed: `latency_endpoint_returns_array`, `latency_endpoint_averages_across_methods`
+
+**Frontend (`crates/web-ui/src/static/index.html`)**  
+- `fetchJSON()` wrapped to record `(timestamp, ms)` per endpoint into in-memory `apiTimings` map
+- Removed `methodColor`/`METHOD_COLORS`; added `endpointColor(i)` cycling through the palette
+- New `updateLatency(rows)` for the single-line backend latency chart
+- New `buildApiLatencyDatasets()` for the multi-line dashboard chart, aligning all endpoints' timings on a unified label axis (null gaps, `spanGaps: false`)
+
+### Tests
+
+22 tests across all three crates — all pass.

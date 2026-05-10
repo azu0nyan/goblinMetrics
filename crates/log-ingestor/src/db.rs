@@ -10,8 +10,8 @@ pub async fn insert_entries(pool: &SqlitePool, entries: &[LogEntry]) -> Result<(
     for e in entries {
         sqlx::query(
             "INSERT OR IGNORE INTO requests
-             (timestamp, url, ip, host, user_agent, status_code, headers)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (timestamp, url, ip, host, user_agent, status_code, headers, method, response_time_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(e.timestamp_ms)
         .bind(&e.url)
@@ -20,6 +20,8 @@ pub async fn insert_entries(pool: &SqlitePool, entries: &[LogEntry]) -> Result<(
         .bind(&e.user_agent)
         .bind(e.status_code)
         .bind(&e.headers)
+        .bind(&e.method)
+        .bind(e.response_time_ms)
         .execute(&mut *tx)
         .await?;
     }
@@ -67,13 +69,15 @@ pub mod tests {
     async fn db_insert_and_query() {
         let pool = in_memory_pool().await;
         let entries = vec![LogEntry {
-            timestamp_ms: 1_000_000,
-            url:          "/test".into(),
-            ip:           "10.0.0.1".into(),
-            host:         "goblin.geno.su".into(),
-            user_agent:   Some("TestAgent".into()),
-            status_code:  200,
-            headers:      "{}".into(),
+            timestamp_ms:     1_000_000,
+            url:              "/test".into(),
+            ip:               "10.0.0.1".into(),
+            host:             "goblin.geno.su".into(),
+            method:           "GET".into(),
+            response_time_ms: 45.0,
+            user_agent:       Some("TestAgent".into()),
+            status_code:      200,
+            headers:          "{}".into(),
         }];
         insert_entries(&pool, &entries).await.unwrap();
 

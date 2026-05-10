@@ -50,6 +50,7 @@ pub fn build_app(pool: SqlitePool) -> Router {
         .route("/api/requests/status_timeseries", get(api::requests_status_timeseries))
         .route("/api/requests/status_codes", get(api::requests_status_codes))
         .route("/api/requests/top_urls", get(api::requests_top_urls))
+        .route("/api/requests/latency", get(api::requests_latency))
         .layer(CompressionLayer::new())
         .with_state(pool)
 }
@@ -61,11 +62,18 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''")
         .execute(pool)
         .await;
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)",
-    )
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN method TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN response_time_ms REAL DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_method ON requests(method)")
+        .execute(pool)
+        .await;
     Ok(())
 }
 
@@ -180,6 +188,47 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let total: i64 = body.as_array().unwrap().iter().map(|p| p["count"].as_i64().unwrap_or(0)).sum();
         assert_eq!(total, 1, "host filter should return only site-a rows");
+    }
+
+    #[tokio::test]
+    async fn latency_endpoint_returns_array() {
+        let (status, body) = get(
+            build_app(test_pool().await),
+            "/api/requests/latency?hours=1&bucket=minute",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn latency_endpoint_averages_across_methods() {
+        let pool = test_pool().await;
+        let base_ts: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (method, rt_ms) in [("GET", 50.0_f64), ("POST", 150.0_f64)] {
+            sqlx::query(
+                "INSERT INTO requests (timestamp, url, ip, status_code, headers, method, response_time_ms)
+                 VALUES (?1, '/test', '127.0.0.1', 200, '{}', ?2, ?3)",
+            )
+            .bind(base_ts)
+            .bind(method)
+            .bind(rt_ms)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let (status, body) = get(
+            build_app(pool),
+            "/api/requests/latency?hours=999&bucket=minute",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert!((arr[0]["avg_ms"].as_f64().unwrap() - 100.0).abs() < 0.01);
     }
 
     #[tokio::test]

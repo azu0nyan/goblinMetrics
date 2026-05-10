@@ -1,1 +1,0 @@
-/home/azu/projects/goblinMetrics/target/release/log-ingestor: /home/azu/projects/goblinMetrics/crates/log-ingestor/src/../../../migrations/001_init.sql /home/azu/projects/goblinMetrics/crates/log-ingestor/src/db.rs /home/azu/projects/goblinMetrics/crates/log-ingestor/src/main.rs /home/azu/projects/goblinMetrics/crates/log-ingestor/src/parser.rs

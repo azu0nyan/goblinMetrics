@@ -1,0 +1,2 @@
+ALTER TABLE requests ADD COLUMN method TEXT DEFAULT '';
+ALTER TABLE requests ADD COLUMN response_time_ms REAL DEFAULT 0;

@@ -125,8 +125,26 @@ tr:hover td{background:#1e2235}
         <div class="chart-wrap"><canvas id="req-chart"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-head"><h3 id="status-title">Status Codes / min</h3></div>
+        <div class="card-head">
+          <h3 id="status-title">Status Codes / min</h3>
+          <button id="status-type-btn" class="type-btn" title="Toggle bar/line">▬</button>
+        </div>
         <div class="chart-wrap"><canvas id="status-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Latency charts -->
+    <div class="charts-row" style="margin-top:.75rem">
+      <div class="card">
+        <div class="card-head"><h3 id="latency-title">Avg Backend Latency (nginx logs)</h3></div>
+        <div class="chart-wrap"><canvas id="latency-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Dashboard API Latency (UI-measured)</h3>
+          <button id="api-clear-btn" class="type-btn" title="Clear history">⟲</button>
+        </div>
+        <div class="chart-wrap"><canvas id="api-latency-chart"></canvas></div>
       </div>
     </div>
 
@@ -159,49 +177,66 @@ const STATUS_COLORS = {
 function statusColor(code) {
   return STATUS_COLORS[String(code)[0]] || C.grey;
 }
+const ENDPOINT_PALETTE = [C.blue, C.green, C.yellow, C.cyan, C.red, C.purple, C.grey];
+function endpointColor(i) { return ENDPOINT_PALETTE[i % ENDPOINT_PALETTE.length]; }
+
 const GRID = {color:'rgba(255,255,255,.05)'};
 const TICK = {color:'#64748b',font:{size:10}};
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let range = { from: null, to: null, hours: 1 }; // null from/to → use hours
-let cachedTopUrls = [];     // 10-row cache
+let range = { from: null, to: null, hours: 1 };
+let cachedTopUrls = [];
 let showAllUrls = false;
-let reqType = localStorage.getItem('goblin-req-type') || 'bar';
+let reqType    = localStorage.getItem('goblin-req-type')    || 'bar';
+let statusType = localStorage.getItem('goblin-status-type') || 'bar';
+
+// Per-endpoint client-measured fetch durations: { '/api/metrics': [{ts, ms}, ...] }
+const apiTimings = {};
+const MAX_TIMINGS_PER_ENDPOINT = 60;
 
 // ── Chart factories ───────────────────────────────────────────────────────────
-function lineChart(id, label, color) {
-  const ctx = document.getElementById(id).getContext('2d');
-  return new Chart(ctx, {
+function tooltipLabel(suffix, decimals = 2) {
+  return { label: item => `${item.dataset.label}: ${+item.parsed.y.toFixed(decimals)}${suffix}` };
+}
+
+const HOVER = {mode:'index', intersect:false, axis:'x'};
+
+function lineChart(id, label, color, suffix = '') {
+  return new Chart(document.getElementById(id), {
     type: 'line',
     data: {labels:[], datasets:[{label, data:[], borderColor:color,
       backgroundColor:color.replace('.85)','.12)'), borderWidth:1.5,
-      pointRadius:0, tension:0.3, fill:true}]},
+      pointRadius:0, pointHoverRadius:4, tension:0.3, fill:true}]},
     options:{responsive:true,maintainAspectRatio:false,animation:false,
-      plugins:{legend:{display:false}},
+      interaction:HOVER,
+      plugins:{legend:{display:false}, tooltip:{...HOVER, callbacks:tooltipLabel(suffix)}},
       scales:{x:{grid:GRID,ticks:{...TICK,maxTicksLimit:7}},
               y:{grid:GRID,ticks:TICK,beginAtZero:true}}}
   });
 }
 
-function barChart(id, label, color) {
-  const ctx = document.getElementById(id).getContext('2d');
-  return new Chart(ctx, {
+function barChart(id, label, color, suffix = '') {
+  return new Chart(document.getElementById(id), {
     type:'bar',
     data:{labels:[],datasets:[{label,data:[],backgroundColor:color,borderRadius:2}]},
     options:{responsive:true,maintainAspectRatio:false,animation:false,
-      plugins:{legend:{display:false}},
+      interaction:HOVER,
+      plugins:{legend:{display:false}, tooltip:{...HOVER, callbacks:tooltipLabel(suffix, 0)}},
       scales:{x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9}},
               y:{grid:GRID,ticks:TICK,beginAtZero:true}}}
   });
 }
 
 function stackedBarChart(id) {
-  const ctx = document.getElementById(id).getContext('2d');
-  return new Chart(ctx, {
+  return new Chart(document.getElementById(id), {
     type:'bar',
     data:{labels:[],datasets:[]},
     options:{responsive:true,maintainAspectRatio:false,animation:false,
-      plugins:{legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10}}},
+      interaction:HOVER,
+      plugins:{
+        legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10}},
+        tooltip:{...HOVER, callbacks:{label:item=>`${item.dataset.label}: ${item.parsed.y}`}},
+      },
       scales:{
         x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9},stacked:true},
         y:{grid:GRID,ticks:TICK,beginAtZero:true,stacked:true}
@@ -209,25 +244,68 @@ function stackedBarChart(id) {
   });
 }
 
+function stackedLineChart(id) {
+  return new Chart(document.getElementById(id), {
+    type:'line',
+    data:{labels:[],datasets:[]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:HOVER,
+      plugins:{
+        legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10}},
+        tooltip:{...HOVER, callbacks:{label:item=>`${item.dataset.label}: ${item.parsed.y}`}},
+      },
+      scales:{
+        x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9},stacked:true},
+        y:{grid:GRID,ticks:TICK,beginAtZero:true,stacked:true}
+      },
+      elements:{point:{radius:0,hoverRadius:4},line:{tension:0.3}}}
+  });
+}
+
+function multiLineChart(id) {
+  return new Chart(document.getElementById(id), {
+    type:'line',
+    data:{labels:[],datasets:[]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:HOVER,
+      plugins:{
+        legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10}},
+        tooltip:{...HOVER, callbacks:{label:item=>
+          `${item.dataset.label}: ${item.parsed.y!=null?item.parsed.y.toFixed(1)+' ms':'–'}`}},
+      },
+      scales:{
+        x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9}},
+        y:{grid:GRID,ticks:TICK,beginAtZero:true,
+           title:{display:true,text:'ms',color:'#64748b',font:{size:10}}}
+      },
+      elements:{point:{radius:0,hoverRadius:4},line:{tension:0.3}}}
+  });
+}
+
 const charts = {
-  cpu:    lineChart('cpu-chart',  'CPU %',       C.purple),
-  mem:    lineChart('mem-chart',  'Mem Used %',  C.green),
-  load:   lineChart('load-chart', 'Load Avg 1m', C.cyan),
-  req:    reqType === 'bar' ? barChart('req-chart', 'Requests', C.blue) : lineChart('req-chart', 'Requests', C.blue),
-  status: stackedBarChart('status-chart'),
+  cpu:     lineChart('cpu-chart',  'CPU %',       C.purple, '%'),
+  mem:     lineChart('mem-chart',  'Mem Used %',  C.green,  '%'),
+  load:    lineChart('load-chart', 'Load Avg 1m', C.cyan,   ''),
+  req:     reqType === 'bar'
+             ? barChart('req-chart',  'Requests', C.blue, ' req')
+             : lineChart('req-chart', 'Requests', C.blue, ' req'),
+  status:     statusType === 'bar' ? stackedBarChart('status-chart') : stackedLineChart('status-chart'),
+  latency:    lineChart('latency-chart',     'Avg', C.cyan, ' ms'),
+  apiLatency: multiLineChart('api-latency-chart'),
 };
-document.getElementById('req-type-btn').textContent = reqType === 'bar' ? '▬' : '∿';
+document.getElementById('req-type-btn').textContent    = reqType    === 'bar' ? '▬' : '∿';
+document.getElementById('status-type-btn').textContent = statusType === 'bar' ? '▬' : '∿';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmtLabel(ms, bucketMs) {
+function fmtLabel(ms, bms) {
   const d = new Date(ms);
-  if (bucketMs >= 3_600_000) {
+  if (bms >= 3_600_000) {
     return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' +
            d.getHours().toString().padStart(2,'0') + ':00';
   }
   return d.getHours().toString().padStart(2,'0') + ':' +
          d.getMinutes().toString().padStart(2,'0') +
-         (bucketMs < 60_000 ? ':' + d.getSeconds().toString().padStart(2,'0') : '');
+         (bms < 60_000 ? ':' + d.getSeconds().toString().padStart(2,'0') : '');
 }
 
 function bucketMs() {
@@ -248,7 +326,13 @@ function rangeParams() {
 }
 
 async function fetchJSON(url) {
+  const start = performance.now();
   const r = await fetch(url);
+  const ms = performance.now() - start;
+  const endpoint = url.split('?')[0];
+  if (!apiTimings[endpoint]) apiTimings[endpoint] = [];
+  apiTimings[endpoint].push({ ts: Date.now(), ms });
+  if (apiTimings[endpoint].length > MAX_TIMINGS_PER_ENDPOINT) apiTimings[endpoint].shift();
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
@@ -262,25 +346,70 @@ function updateLine(chart, points) {
 
 // ── Status timeseries: build stacked datasets ─────────────────────────────────
 function buildStatusDatasets(rows) {
-  if (!rows.length) { charts.status.data.labels=[]; charts.status.data.datasets=[]; charts.status.update('none'); return; }
-
+  if (!rows.length) {
+    charts.status.data.labels = [];
+    charts.status.data.datasets = [];
+    charts.status.update('none');
+    return;
+  }
   const bms = bucketMs();
   const buckets = [...new Set(rows.map(r => r.bucket_ts))].sort((a,b)=>a-b);
   const codes   = [...new Set(rows.map(r => r.status_code))].sort((a,b)=>a-b);
-
-  // index rows by bucket+code
   const map = {};
   rows.forEach(r => { map[`${r.bucket_ts}_${r.status_code}`] = r.count; });
-
-  charts.status.data.labels = buckets.map(ts => fmtLabel(ts, bms));
+  charts.status.data.labels   = buckets.map(ts => fmtLabel(ts, bms));
   charts.status.data.datasets = codes.map(code => ({
     label: String(code),
     data:  buckets.map(ts => map[`${ts}_${code}`] || 0),
     backgroundColor: statusColor(code),
+    borderColor:     statusColor(code),
     borderRadius: 1,
-    borderWidth: 0,
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: 0.3,
+    fill: true,
   }));
   charts.status.update('none');
+}
+
+// ── Avg backend latency: single-line chart, aligned to RPS chart buckets ─────
+function updateLatency(rows, refLabels, refBuckets) {
+  const map = {};
+  rows.forEach(r => { map[r.bucket_ts] = r.avg_ms; });
+  charts.latency.data.labels = refLabels;
+  charts.latency.data.datasets[0].data = refBuckets.map(ts => map[ts] ?? null);
+  charts.latency.data.datasets[0].spanGaps = true;
+  charts.latency.update('none');
+}
+
+// ── Dashboard API latency: client-measured timings, one line per endpoint ─────
+function buildApiLatencyDatasets() {
+  const endpoints = Object.keys(apiTimings).sort();
+  if (!endpoints.length) {
+    charts.apiLatency.data.labels   = [];
+    charts.apiLatency.data.datasets = [];
+    charts.apiLatency.update('none');
+    return;
+  }
+  const tsSet = new Set();
+  endpoints.forEach(ep => apiTimings[ep].forEach(p => tsSet.add(p.ts)));
+  const allTs = [...tsSet].sort((a, b) => a - b);
+  charts.apiLatency.data.labels = allTs.map(ts => fmtLabel(ts, 1000));
+  charts.apiLatency.data.datasets = endpoints.map((ep, i) => {
+    const map = {};
+    apiTimings[ep].forEach(p => { map[p.ts] = p.ms; });
+    const color = endpointColor(i);
+    return {
+      label:           ep.replace('/api/', ''),
+      data:            allTs.map(ts => map[ts] ?? null),
+      borderColor:     color,
+      backgroundColor: color.replace('.85)','.12)'),
+      borderWidth: 1.5,
+      pointRadius: 0,
+      spanGaps: false,
+    };
+  });
+  charts.apiLatency.update('none');
 }
 
 // ── Top URLs table ────────────────────────────────────────────────────────────
@@ -295,7 +424,6 @@ function renderUrls(rows) {
     `<tr><td>${escHtml(r.url)}</td><td>${r.count.toLocaleString()}</td></tr>`
   ).join('');
 }
-
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -306,32 +434,35 @@ async function refresh() {
   const bkt = document.getElementById('bucket-select').value;
 
   try {
-    const [cpu, mem, load, ts, stTs, tu] = await Promise.all([
+    const [cpu, mem, load, ts, stTs, tu, lat] = await Promise.all([
       fetchJSON(`/api/metrics?name=cpu_usage_pct&${rp}`),
       fetchJSON(`/api/metrics?name=memory_used_pct&${rp}`),
       fetchJSON(`/api/metrics?name=load_avg_1m&${rp}`),
       fetchJSON(`/api/requests/timeseries?${rp}&bucket=${bkt}`),
       fetchJSON(`/api/requests/status_timeseries?${rp}&bucket=${bkt}`),
       fetchJSON(`/api/requests/top_urls?${rp}&limit=10`),
+      fetchJSON(`/api/requests/latency?${rp}&bucket=${bkt}`),
     ]);
 
     updateLine(charts.cpu,  cpu);
     updateLine(charts.mem,  mem);
     updateLine(charts.load, load);
 
-    // Request rate
-    const bms = bucketMs();
-    charts.req.data.labels = ts.map(p => fmtLabel(p.bucket_ts, bms));
+    const bms        = bucketMs();
+    const reqBuckets = ts.map(p => p.bucket_ts);
+    const reqLabels  = reqBuckets.map(b => fmtLabel(b, bms));
+    charts.req.data.labels = reqLabels;
     charts.req.data.datasets[0].data = ts.map(p => p.count);
     charts.req.update('none');
 
     const lbl = bucketLabel();
-    document.getElementById('req-title').textContent  = `Requests / ${lbl.replace('req/','')}`;
+    document.getElementById('req-title').textContent    = `Requests / ${lbl.replace('req/','')}`;
     document.getElementById('status-title').textContent = `Status Codes / ${lbl.replace('req/','')}`;
 
     buildStatusDatasets(stTs);
+    updateLatency(lat, reqLabels, reqBuckets);
+    buildApiLatencyDatasets();
 
-    // Top URLs
     cachedTopUrls = tu;
     if (!showAllUrls) {
       renderUrls(tu);
@@ -353,20 +484,40 @@ async function refresh() {
 
 // ── Controls wiring ───────────────────────────────────────────────────────────
 
-// Bar/line toggle for request-rate chart
+// Bar/line toggle — request rate
 document.getElementById('req-type-btn').addEventListener('click', () => {
   const labels = charts.req.data.labels.slice();
   const data   = charts.req.data.datasets[0].data.slice();
   charts.req.destroy();
   reqType = reqType === 'bar' ? 'line' : 'bar';
   charts.req = reqType === 'bar'
-    ? barChart('req-chart',  'Requests', C.blue)
-    : lineChart('req-chart', 'Requests', C.blue);
+    ? barChart('req-chart',  'Requests', C.blue, ' req')
+    : lineChart('req-chart', 'Requests', C.blue, ' req');
   charts.req.data.labels = labels;
   charts.req.data.datasets[0].data = data;
   charts.req.update('none');
   document.getElementById('req-type-btn').textContent = reqType === 'bar' ? '▬' : '∿';
   localStorage.setItem('goblin-req-type', reqType);
+});
+
+// Bar/line toggle — status codes
+document.getElementById('status-type-btn').addEventListener('click', () => {
+  const labels   = charts.status.data.labels.slice();
+  const datasets = charts.status.data.datasets.map(d => ({ ...d }));
+  charts.status.destroy();
+  statusType = statusType === 'bar' ? 'line' : 'bar';
+  charts.status = statusType === 'bar' ? stackedBarChart('status-chart') : stackedLineChart('status-chart');
+  charts.status.data.labels   = labels;
+  charts.status.data.datasets = datasets;
+  charts.status.update('none');
+  document.getElementById('status-type-btn').textContent = statusType === 'bar' ? '▬' : '∿';
+  localStorage.setItem('goblin-status-type', statusType);
+});
+
+// Clear dashboard API timing history
+document.getElementById('api-clear-btn').addEventListener('click', () => {
+  for (const k of Object.keys(apiTimings)) delete apiTimings[k];
+  buildApiLatencyDatasets();
 });
 
 // Host filter
@@ -378,7 +529,7 @@ document.getElementById('host-select').addEventListener('change', () => {
 async function populateHosts() {
   try {
     const hosts = await fetchJSON('/api/requests/hosts');
-    const sel = document.getElementById('host-select');
+    const sel   = document.getElementById('host-select');
     const saved = localStorage.getItem('goblin-host') || '';
     hosts.forEach(h => {
       const opt = document.createElement('option');
@@ -386,12 +537,12 @@ async function populateHosts() {
       if (h === saved) opt.selected = true;
       sel.appendChild(opt);
     });
-  } catch(e) { /* no hosts yet — dropdown stays "All hosts" */ }
+  } catch(e) { /* no hosts yet */ }
 }
 
 // Preset range buttons
 document.querySelectorAll('.range-btn[data-h]').forEach(btn => {
-  if (!btn.dataset.h) return; // skip Custom
+  if (!btn.dataset.h) return;
   btn.addEventListener('click', () => {
     document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -407,8 +558,7 @@ document.getElementById('custom-btn').addEventListener('click', () => {
   document.getElementById('custom-btn').classList.add('active');
   const row = document.getElementById('custom-row');
   row.classList.toggle('open');
-  // Pre-fill inputs with current range
-  const now = new Date();
+  const now  = new Date();
   const from = new Date(now - (range.hours || 1) * 3_600_000);
   document.getElementById('dt-to').value   = toDatetimeLocal(now);
   document.getElementById('dt-from').value = toDatetimeLocal(from);
@@ -446,8 +596,7 @@ document.getElementById('url-toggle').addEventListener('click', async () => {
     showAllUrls = true;
     btn.textContent = 'Fetching…';
     try {
-      const rp = rangeParams();
-      const all = await fetchJSON(`/api/requests/top_urls?${rp}&limit=0`);
+      const all = await fetchJSON(`/api/requests/top_urls?${rangeParams()}&limit=0`);
       renderUrls(all);
       btn.textContent = `Show less (${cachedTopUrls.length})`;
     } catch(e) {

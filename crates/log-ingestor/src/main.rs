@@ -104,15 +104,20 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     sqlx::query(include_str!("../../../migrations/001_init.sql"))
         .execute(pool)
         .await?;
-    // Existing installs: add host column (ignore "duplicate column" error).
     let _ = sqlx::query("ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''")
         .execute(pool)
         .await;
-    // Idempotent index — safe to run whether host was just added or already existed.
-    let _ = sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)",
-    )
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN method TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN response_time_ms REAL DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_method ON requests(method)")
+        .execute(pool)
+        .await;
     Ok(())
 }
