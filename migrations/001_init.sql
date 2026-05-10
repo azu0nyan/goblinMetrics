@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS requests (
     timestamp   INTEGER NOT NULL,
     url         TEXT    NOT NULL,
     ip          TEXT    NOT NULL,
+    host        TEXT    DEFAULT '',
     user_agent  TEXT,
     status_code INTEGER NOT NULL,
     headers     TEXT

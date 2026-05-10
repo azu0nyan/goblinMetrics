@@ -45,6 +45,7 @@ pub fn build_app(pool: SqlitePool) -> Router {
         .route("/health", get(api::health))
         .route("/api/metrics/names", get(api::metric_names))
         .route("/api/metrics", get(api::get_metric_named))
+        .route("/api/requests/hosts", get(api::requests_hosts))
         .route("/api/requests/timeseries", get(api::requests_timeseries))
         .route("/api/requests/status_timeseries", get(api::requests_status_timeseries))
         .route("/api/requests/status_codes", get(api::requests_status_codes))
@@ -57,6 +58,14 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     sqlx::query(include_str!("../../../migrations/001_init.sql"))
         .execute(pool)
         .await?;
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)",
+    )
+    .execute(pool)
+    .await;
     Ok(())
 }
 
@@ -134,6 +143,43 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn requests_hosts_endpoint_returns_array() {
+        let (status, body) = get(build_app(test_pool().await), "/api/requests/hosts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_array());
+    }
+
+    #[tokio::test]
+    async fn requests_timeseries_with_host_filter() {
+        let pool = test_pool().await;
+        let base_ts: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        // Insert rows for two different hosts
+        for (i, host) in [(0, "site-a.example.com"), (1, "site-b.example.com")] {
+            sqlx::query(
+                "INSERT INTO requests (timestamp, url, ip, host, status_code, headers)
+                 VALUES (?1, '/test', '127.0.0.1', ?2, 200, '{}')",
+            )
+            .bind(base_ts - i * 1000_i64)
+            .bind(host)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // Filter for site-a only
+        let (status, body) = get(
+            build_app(pool),
+            &format!("/api/requests/timeseries?hours=999&host=site-a.example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let total: i64 = body.as_array().unwrap().iter().map(|p| p["count"].as_i64().unwrap_or(0)).sum();
+        assert_eq!(total, 1, "host filter should return only site-a rows");
     }
 
     #[tokio::test]

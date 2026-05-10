@@ -71,14 +71,15 @@ async fn process_new_lines(pool: &SqlitePool, path: &str, offset: &mut u64) -> R
     reader.seek(SeekFrom::Start(*offset))?;
 
     let mut entries = Vec::new();
-    let mut line = String::new();
+    let mut buf: Vec<u8> = Vec::new();
 
     loop {
-        line.clear();
-        let n = reader.read_line(&mut line)?;
+        buf.clear();
+        let n = reader.read_until(b'\n', &mut buf)?;
         if n == 0 {
             break;
         }
+        let line = String::from_utf8_lossy(&buf);
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             continue;
@@ -103,5 +104,15 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     sqlx::query(include_str!("../../../migrations/001_init.sql"))
         .execute(pool)
         .await?;
+    // Existing installs: add host column (ignore "duplicate column" error).
+    let _ = sqlx::query("ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    // Idempotent index — safe to run whether host was just added or already existed.
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_req_host ON requests(host)",
+    )
+    .execute(pool)
+    .await;
     Ok(())
 }

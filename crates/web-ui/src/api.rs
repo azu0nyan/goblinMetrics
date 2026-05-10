@@ -23,14 +23,13 @@ fn hours_to_ms(hours: f64) -> i64 {
 
 // ── Shared query types ────────────────────────────────────────────────────────
 
-/// Shared time range parameters accepted by all endpoints.
-/// Resolution order for `from`: explicit `from` > `to - hours` > `to - 1h`.
 #[derive(Deserialize)]
 pub struct RangeQuery {
     pub from:   Option<i64>,
     pub to:     Option<i64>,
     pub hours:  Option<f64>,
     pub bucket: Option<Bucket>,
+    pub host:   Option<String>,
 }
 
 impl RangeQuery {
@@ -44,6 +43,10 @@ impl RangeQuery {
 
     pub fn bucket_ms(&self) -> i64 {
         self.bucket.as_ref().map(Bucket::ms).unwrap_or(60_000)
+    }
+
+    pub fn host_filter(&self) -> Option<&str> {
+        self.host.as_deref().filter(|h| !h.is_empty())
     }
 }
 
@@ -91,7 +94,6 @@ pub struct MetricPoint {
     pub timestamp: i64,
 }
 
-// Separate extractor for the `name` param alongside the range params.
 #[derive(Deserialize)]
 pub struct MetricQuery {
     pub name:  String,
@@ -125,6 +127,18 @@ pub async fn get_metric_named(
     Ok(Json(points))
 }
 
+// ── /api/requests/hosts ──────────────────────────────────────────────────────
+
+pub async fn requests_hosts(State(pool): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT host FROM requests WHERE host != '' ORDER BY host",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let hosts: Vec<String> = rows.into_iter().map(|(h,)| h).collect();
+    Ok(Json(hosts))
+}
+
 // ── /api/requests/timeseries ─────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -137,14 +151,15 @@ pub async fn requests_timeseries(
     State(pool): State<AppState>,
     Query(q): Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let (from, to)  = q.resolve();
-    let bucket_ms   = q.bucket_ms();
+    let (from, to) = q.resolve();
+    let bucket_ms  = q.bucket_ms();
+    let host       = q.host_filter();
 
-    // Inject the integer literal directly — it's derived from a validated enum, not user input.
     let sql = format!(
         "SELECT COUNT(*) as count, (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts
          FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
          GROUP BY bucket_ts
          ORDER BY bucket_ts ASC"
     );
@@ -152,6 +167,7 @@ pub async fn requests_timeseries(
     let rows: Vec<(i64, i64)> = sqlx::query_as(&sql)
         .bind(from)
         .bind(to)
+        .bind(host)
         .fetch_all(&pool)
         .await?;
 
@@ -175,14 +191,16 @@ pub async fn requests_status_timeseries(
     State(pool): State<AppState>,
     Query(q): Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let (from, to)  = q.resolve();
-    let bucket_ms   = q.bucket_ms();
+    let (from, to) = q.resolve();
+    let bucket_ms  = q.bucket_ms();
+    let host       = q.host_filter();
 
     let sql = format!(
         "SELECT (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
                 status_code, COUNT(*) as count
          FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
          GROUP BY bucket_ts, status_code
          ORDER BY bucket_ts ASC, status_code ASC"
     );
@@ -190,6 +208,7 @@ pub async fn requests_status_timeseries(
     let rows: Vec<(i64, i64, i64)> = sqlx::query_as(&sql)
         .bind(from)
         .bind(to)
+        .bind(host)
         .fetch_all(&pool)
         .await?;
 
@@ -213,14 +232,18 @@ pub async fn requests_status_codes(
     Query(q): Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let (from, to) = q.resolve();
+    let host       = q.host_filter();
+
     let rows: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT status_code, COUNT(*) FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
          GROUP BY status_code
          ORDER BY status_code ASC",
     )
     .bind(from)
     .bind(to)
+    .bind(host)
     .fetch_all(&pool)
     .await?;
 
@@ -238,6 +261,7 @@ pub struct TopUrlsQuery {
     pub from:  Option<i64>,
     pub to:    Option<i64>,
     pub hours: Option<f64>,
+    pub host:  Option<String>,
     #[serde(default = "default_limit")]
     pub limit: i64,
 }
@@ -255,19 +279,20 @@ pub async fn requests_top_urls(
 ) -> Result<impl IntoResponse, AppError> {
     let to   = q.to.unwrap_or_else(now_ms);
     let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
-
-    // limit=0 means no cap; clamp to 5000 to prevent runaway scans.
+    let host = q.host.as_deref().filter(|h| !h.is_empty());
     let sql_limit: i64 = if q.limit == 0 { 5000 } else { q.limit };
 
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT url, COUNT(*) AS count FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
          GROUP BY url
          ORDER BY count DESC
-         LIMIT ?3",
+         LIMIT ?4",
     )
     .bind(from)
     .bind(to)
+    .bind(host)
     .bind(sql_limit)
     .fetch_all(&pool)
     .await?;

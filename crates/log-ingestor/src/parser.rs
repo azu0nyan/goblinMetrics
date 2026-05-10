@@ -9,6 +9,7 @@ pub struct LogEntry {
     pub timestamp_ms: i64,
     pub url:          String,
     pub ip:           String,
+    pub host:         String,
     pub user_agent:   Option<String>,
     pub status_code:  i64,
     pub headers:      String,
@@ -33,6 +34,8 @@ struct RawEntry {
     x_forwarded_for: String,
     #[serde(default)]
     content_type:    String,
+    #[serde(default)]
+    host:            String,
 }
 
 pub fn parse_line(line: &str) -> Result<LogEntry> {
@@ -66,6 +69,7 @@ pub fn parse_line(line: &str) -> Result<LogEntry> {
         timestamp_ms,
         url,
         ip: raw.remote_addr,
+        host: raw.host,
         user_agent: ua,
         status_code,
         headers,
@@ -104,7 +108,7 @@ fn build_headers_json(raw: &RawEntry) -> String {
 mod tests {
     use super::*;
 
-    const VALID: &str = r#"{"remote_addr":"1.2.3.4","time_local":"09/May/2026:17:05:56 +0200","request":"GET /goblin-lore HTTP/2.0","status":200,"body_bytes_sent":2426,"referer":"https://goblin.geno.su/","user_agent":"Mozilla/5.0","accept":"text/html","accept_language":"en-US","x_forwarded_for":"","content_type":""}"#;
+    const VALID: &str = r#"{"remote_addr":"1.2.3.4","time_local":"09/May/2026:17:05:56 +0200","request":"GET /goblin-lore HTTP/2.0","status":200,"body_bytes_sent":2426,"referer":"https://goblin.geno.su/","user_agent":"Mozilla/5.0","accept":"text/html","accept_language":"en-US","x_forwarded_for":"","content_type":"","host":"goblin.geno.su"}"#;
 
     #[test]
     fn parse_valid_line() {
@@ -112,9 +116,17 @@ mod tests {
         assert_eq!(e.ip, "1.2.3.4");
         assert_eq!(e.url, "/goblin-lore");
         assert_eq!(e.status_code, 200);
+        assert_eq!(e.host, "goblin.geno.su");
         assert!(e.user_agent.as_deref() == Some("Mozilla/5.0"));
         let h: serde_json::Value = serde_json::from_str(&e.headers).unwrap();
         assert_eq!(h["accept"], "text/html");
+    }
+
+    #[test]
+    fn parse_line_without_host_defaults_empty() {
+        let line = r#"{"remote_addr":"1.2.3.4","time_local":"09/May/2026:17:05:56 +0200","request":"GET / HTTP/1.1","status":200,"body_bytes_sent":0,"referer":"","user_agent":"","accept":"","accept_language":"","x_forwarded_for":"","content_type":""}"#;
+        let e = parse_line(line).expect("should parse without host");
+        assert_eq!(e.host, "");
     }
 
     #[test]

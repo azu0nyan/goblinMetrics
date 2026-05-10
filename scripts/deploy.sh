@@ -27,7 +27,7 @@ ssh "$REMOTE" "sudo mkdir -p $REMOTE_BIN && \
 
 echo "==> Uploading migrations and deploy files…"
 ssh "$REMOTE" "mkdir -p /tmp/goblin-migrations /tmp/goblin-deploy"
-scp migrations/001_init.sql "$REMOTE:/tmp/goblin-migrations/"
+scp migrations/001_init.sql migrations/002_add_host.sql "$REMOTE:/tmp/goblin-migrations/"
 scp deploy/goblin-log-ingestor.service deploy/goblin-sys-metrics.service \
     deploy/goblin-web-ui.service deploy/nginx-logging.conf \
   "$REMOTE:/tmp/goblin-deploy/"
@@ -63,6 +63,8 @@ if ! command -v sqlite3 &>/dev/null; then
 fi
 sudo -u goblin-metrics sqlite3 /var/lib/goblin-metrics/metrics.db \
   < /tmp/goblin-migrations/001_init.sql
+sudo -u goblin-metrics sqlite3 /var/lib/goblin-metrics/metrics.db \
+  < /tmp/goblin-migrations/002_add_host.sql 2>/dev/null || true
 echo "  migrations done"
 
 # ── Nginx extended logging ────────────────────────────────────────────────────

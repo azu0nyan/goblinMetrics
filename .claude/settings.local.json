@@ -16,7 +16,13 @@
       "Bash(ssh azu@144.31.17.0 \"cat /etc/logrotate.d/nginx && ls -la /var/log/nginx/\")",
       "Bash(bash scripts/deploy.sh)",
       "Bash(curl -s \"http://144.31.17.0:4444/api/requests/status_timeseries?hours=24&bucket=minute\")",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'status_timeseries: {len\\(d\\)} rows'\\); [print\\(f'  {r}'\\) for r in d[:3]]\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'status_timeseries: {len\\(d\\)} rows'\\); [print\\(f'  {r}'\\) for r in d[:3]]\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo cat /etc/nginx/conf.d/goblin-metrics-logging.conf\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo tail -5 /var/log/nginx/goblin_metrics.log\")",
+      "Bash(curl -s http://144.31.17.0:4444/api/requests/hosts)",
+      "Bash(ssh azu@144.31.17.0 \"sudo journalctl -u goblin-log-ingestor --no-pager -n 20\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo file /var/log/nginx/goblin_metrics.log && sudo wc -l /var/log/nginx/goblin_metrics.log && sudo tail -1 /var/log/nginx/goblin_metrics.log | cat -v | head -c 400\")",
+      "Bash(ssh azu@144.31.17.0 'sudo python3 -c \" *)"
     ]
   }
 }
