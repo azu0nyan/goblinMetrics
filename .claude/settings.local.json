@@ -22,7 +22,11 @@
       "Bash(curl -s http://144.31.17.0:4444/api/requests/hosts)",
       "Bash(ssh azu@144.31.17.0 \"sudo journalctl -u goblin-log-ingestor --no-pager -n 20\")",
       "Bash(ssh azu@144.31.17.0 \"sudo file /var/log/nginx/goblin_metrics.log && sudo wc -l /var/log/nginx/goblin_metrics.log && sudo tail -1 /var/log/nginx/goblin_metrics.log | cat -v | head -c 400\")",
-      "Bash(ssh azu@144.31.17.0 'sudo python3 -c \" *)"
+      "Bash(ssh azu@144.31.17.0 'sudo python3 -c \" *)",
+      "Bash(ssh azu@144.31.17.0 \"sudo systemctl stop goblin-log-ingestor\")",
+      "Bash(scp target/release/log-ingestor azu@144.31.17.0:/tmp/goblin-bins/)",
+      "Bash(ssh azu@144.31.17.0 \"sudo install -m 750 -o root -g goblin-metrics /tmp/goblin-bins/log-ingestor /opt/goblin-metrics/log-ingestor && sudo systemctl start goblin-log-ingestor\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo journalctl -u goblin-log-ingestor --no-pager -n 10\")"
     ]
   }
 }
