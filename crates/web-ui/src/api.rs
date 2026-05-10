@@ -21,6 +21,51 @@ fn hours_to_ms(hours: f64) -> i64 {
     (hours * 3_600_000.0) as i64
 }
 
+// ── Shared query types ────────────────────────────────────────────────────────
+
+/// Shared time range parameters accepted by all endpoints.
+/// Resolution order for `from`: explicit `from` > `to - hours` > `to - 1h`.
+#[derive(Deserialize)]
+pub struct RangeQuery {
+    pub from:   Option<i64>,
+    pub to:     Option<i64>,
+    pub hours:  Option<f64>,
+    pub bucket: Option<Bucket>,
+}
+
+impl RangeQuery {
+    pub fn resolve(&self) -> (i64, i64) {
+        let to   = self.to.unwrap_or_else(now_ms);
+        let from = self.from.unwrap_or_else(|| {
+            to - hours_to_ms(self.hours.unwrap_or(1.0))
+        });
+        (from, to)
+    }
+
+    pub fn bucket_ms(&self) -> i64 {
+        self.bucket.as_ref().map(Bucket::ms).unwrap_or(60_000)
+    }
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum Bucket {
+    Second,
+    #[default]
+    Minute,
+    Hour,
+}
+
+impl Bucket {
+    pub fn ms(&self) -> i64 {
+        match self {
+            Bucket::Second => 1_000,
+            Bucket::Minute => 60_000,
+            Bucket::Hour   => 3_600_000,
+        }
+    }
+}
+
 // ── /health ──────────────────────────────────────────────────────────────────
 
 pub async fn health() -> impl IntoResponse {
@@ -40,34 +85,36 @@ pub async fn metric_names(State(pool): State<AppState>) -> Result<impl IntoRespo
 
 // ── /api/metrics ─────────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct MetricQuery {
-    pub name:  String,
-    /// Hours of history to return (default 1).
-    #[serde(default = "default_hours")]
-    pub hours: f64,
-}
-
-fn default_hours() -> f64 { 1.0 }
-
 #[derive(Serialize)]
 pub struct MetricPoint {
     pub value:     f64,
     pub timestamp: i64,
 }
 
-pub async fn get_metric(
+// Separate extractor for the `name` param alongside the range params.
+#[derive(Deserialize)]
+pub struct MetricQuery {
+    pub name:  String,
+    pub from:  Option<i64>,
+    pub to:    Option<i64>,
+    pub hours: Option<f64>,
+}
+
+pub async fn get_metric_named(
     State(pool): State<AppState>,
     Query(q): Query<MetricQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let since = now_ms() - hours_to_ms(q.hours);
+    let to   = q.to.unwrap_or_else(now_ms);
+    let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
+
     let rows: Vec<(f64, i64)> = sqlx::query_as(
         "SELECT metric_value, timestamp FROM metrics
-         WHERE metric_name = ?1 AND timestamp >= ?2
+         WHERE metric_name = ?1 AND timestamp BETWEEN ?2 AND ?3
          ORDER BY timestamp ASC",
     )
     .bind(&q.name)
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await?;
 
@@ -80,12 +127,6 @@ pub async fn get_metric(
 
 // ── /api/requests/timeseries ─────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct TimeQuery {
-    #[serde(default = "default_hours")]
-    pub hours: f64,
-}
-
 #[derive(Serialize)]
 pub struct TimeseriesPoint {
     pub count:     i64,
@@ -94,24 +135,67 @@ pub struct TimeseriesPoint {
 
 pub async fn requests_timeseries(
     State(pool): State<AppState>,
-    Query(q): Query<TimeQuery>,
+    Query(q): Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let since = now_ms() - hours_to_ms(q.hours);
-    // bucket by minute (60 000 ms)
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT COUNT(*) as count, (timestamp / 60000) * 60000 AS bucket_ts
+    let (from, to)  = q.resolve();
+    let bucket_ms   = q.bucket_ms();
+
+    // Inject the integer literal directly — it's derived from a validated enum, not user input.
+    let sql = format!(
+        "SELECT COUNT(*) as count, (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts
          FROM requests
-         WHERE timestamp >= ?1
+         WHERE timestamp BETWEEN ?1 AND ?2
          GROUP BY bucket_ts
-         ORDER BY bucket_ts ASC",
-    )
-    .bind(since)
-    .fetch_all(&pool)
-    .await?;
+         ORDER BY bucket_ts ASC"
+    );
+
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&pool)
+        .await?;
 
     let points: Vec<TimeseriesPoint> = rows
         .into_iter()
         .map(|(count, bucket_ts)| TimeseriesPoint { count, bucket_ts })
+        .collect();
+    Ok(Json(points))
+}
+
+// ── /api/requests/status_timeseries ──────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct StatusTimeseriesPoint {
+    pub bucket_ts:   i64,
+    pub status_code: i64,
+    pub count:       i64,
+}
+
+pub async fn requests_status_timeseries(
+    State(pool): State<AppState>,
+    Query(q): Query<RangeQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let (from, to)  = q.resolve();
+    let bucket_ms   = q.bucket_ms();
+
+    let sql = format!(
+        "SELECT (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
+                status_code, COUNT(*) as count
+         FROM requests
+         WHERE timestamp BETWEEN ?1 AND ?2
+         GROUP BY bucket_ts, status_code
+         ORDER BY bucket_ts ASC, status_code ASC"
+    );
+
+    let rows: Vec<(i64, i64, i64)> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&pool)
+        .await?;
+
+    let points: Vec<StatusTimeseriesPoint> = rows
+        .into_iter()
+        .map(|(bucket_ts, status_code, count)| StatusTimeseriesPoint { bucket_ts, status_code, count })
         .collect();
     Ok(Json(points))
 }
@@ -126,16 +210,17 @@ pub struct StatusCodeCount {
 
 pub async fn requests_status_codes(
     State(pool): State<AppState>,
-    Query(q): Query<TimeQuery>,
+    Query(q): Query<RangeQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let since = now_ms() - hours_to_ms(q.hours);
+    let (from, to) = q.resolve();
     let rows: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT status_code, COUNT(*) FROM requests
-         WHERE timestamp >= ?1
+         WHERE timestamp BETWEEN ?1 AND ?2
          GROUP BY status_code
          ORDER BY status_code ASC",
     )
-    .bind(since)
+    .bind(from)
+    .bind(to)
     .fetch_all(&pool)
     .await?;
 
@@ -150,8 +235,9 @@ pub async fn requests_status_codes(
 
 #[derive(Deserialize)]
 pub struct TopUrlsQuery {
-    #[serde(default = "default_hours")]
-    pub hours: f64,
+    pub from:  Option<i64>,
+    pub to:    Option<i64>,
+    pub hours: Option<f64>,
     #[serde(default = "default_limit")]
     pub limit: i64,
 }
@@ -167,16 +253,22 @@ pub async fn requests_top_urls(
     State(pool): State<AppState>,
     Query(q): Query<TopUrlsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let since = now_ms() - hours_to_ms(q.hours);
+    let to   = q.to.unwrap_or_else(now_ms);
+    let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
+
+    // limit=0 means no cap; clamp to 5000 to prevent runaway scans.
+    let sql_limit: i64 = if q.limit == 0 { 5000 } else { q.limit };
+
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT url, COUNT(*) AS count FROM requests
-         WHERE timestamp >= ?1
+         WHERE timestamp BETWEEN ?1 AND ?2
          GROUP BY url
          ORDER BY count DESC
-         LIMIT ?2",
+         LIMIT ?3",
     )
-    .bind(since)
-    .bind(q.limit)
+    .bind(from)
+    .bind(to)
+    .bind(sql_limit)
     .fetch_all(&pool)
     .await?;
 

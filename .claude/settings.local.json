@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh azu@144.31.17.0 \"echo '=== LOG SAMPLE ===' && sudo head -3 /var/log/nginx/goblin_slop_access.log 2>/dev/null && echo '=== OS ===' && cat /etc/os-release && echo '=== RUST ===' && which rustc 2>/dev/null; rustc --version 2>/dev/null; cargo --version 2>/dev/null && echo '=== HOME ===' && ls /home/azu/ && echo '=== RESOURCES ===' && free -h && nproc && echo '=== NGINX CONF ===' && cat /etc/nginx/nginx.conf | head -60\")",
+      "Bash(ssh azu@144.31.17.0 \"ls /home/azu/ && free -h && nproc && ls /etc/nginx/sites-enabled/ && cat /etc/nginx/nginx.conf | grep -E 'log_format|access_log' | head -20\")",
+      "Bash(ssh azu@144.31.17.0 \"cat /etc/nginx/sites-enabled/goblin.geno.su\")",
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(ssh azu@144.31.17.0 \"ls -la /var/log/nginx/goblin_metrics.log 2>/dev/null && wc -l /var/log/nginx/goblin_metrics.log 2>/dev/null || echo 'log file does not exist yet'\")",
+      "Bash(curl -s \"http://144.31.17.0:4444/api/requests/timeseries?hours=24\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); total=sum\\(p['count'] for p in d\\); print\\(f'{len\\(d\\)} buckets, {total} total requests'\\)\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo journalctl -u goblin-log-ingestor -n 30 --no-pager\")",
+      "Bash(ssh azu@144.31.17.0 \"sqlite3 /var/lib/goblin-metrics/metrics.db 'SELECT COUNT\\(*\\) FROM requests; SELECT COUNT\\(*\\) FROM metrics;'\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo -u goblin-metrics sqlite3 /var/lib/goblin-metrics/metrics.db 'SELECT COUNT\\(*\\) FROM requests; SELECT COUNT\\(*\\) FROM metrics;'\")",
+      "Bash(ssh azu@144.31.17.0 \"sudo -u goblin-metrics sqlite3 /var/lib/goblin-metrics/metrics.db 'SELECT * FROM ingestor_state;' && wc -c /var/log/nginx/goblin_metrics.log && wc -l /var/log/nginx/goblin_metrics.log\")",
+      "Bash(ssh azu@144.31.17.0 \"cat /etc/logrotate.d/nginx && ls -la /var/log/nginx/\")",
+      "Bash(bash scripts/deploy.sh)",
+      "Bash(curl -s \"http://144.31.17.0:4444/api/requests/status_timeseries?hours=24&bucket=minute\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'status_timeseries: {len\\(d\\)} rows'\\); [print\\(f'  {r}'\\) for r in d[:3]]\")"
+    ]
+  }
+}

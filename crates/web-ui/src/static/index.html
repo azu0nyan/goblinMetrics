@@ -8,192 +8,328 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
-header{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.5rem;background:#1a1d27;border-bottom:1px solid #2d3148}
-header h1{font-size:1.25rem;font-weight:700;color:#a78bfa;letter-spacing:.05em}
-.controls{display:flex;gap:.75rem;align-items:center}
-select{background:#252836;color:#e2e8f0;border:1px solid #3d4166;border-radius:.375rem;padding:.35rem .6rem;font-size:.85rem;cursor:pointer}
-select:focus{outline:2px solid #7c3aed}
-.badge{font-size:.75rem;padding:.2rem .5rem;border-radius:.25rem;background:#252836;color:#94a3b8}
-main{padding:1.5rem;display:grid;gap:1.5rem}
-.section-title{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#7c3aed;margin-bottom:.75rem}
-.charts-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:1rem}
-.card{background:#1a1d27;border:1px solid #2d3148;border-radius:.5rem;padding:1rem}
-.card h3{font-size:.85rem;font-weight:600;color:#94a3b8;margin-bottom:.75rem}
-.chart-wrap{position:relative;height:180px}
-table{width:100%;border-collapse:collapse;font-size:.82rem}
+
+/* ── Header ── */
+header{background:#1a1d27;border-bottom:1px solid #2d3148;padding:.75rem 1.25rem;display:flex;flex-direction:column;gap:.5rem}
+.header-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+header h1{font-size:1.15rem;font-weight:700;color:#a78bfa;letter-spacing:.05em}
+.controls{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+
+/* Preset range buttons */
+.range-btns{display:flex;gap:2px}
+.range-btn{background:#252836;color:#94a3b8;border:1px solid #3d4166;border-radius:.3rem;padding:.3rem .55rem;font-size:.8rem;cursor:pointer;transition:background .15s}
+.range-btn:hover{background:#2d3148}
+.range-btn.active{background:#7c3aed;color:#fff;border-color:#7c3aed}
+
+/* Custom range row */
+.custom-row{display:none;align-items:center;gap:.5rem;flex-wrap:wrap}
+.custom-row.open{display:flex}
+.custom-row input[type=datetime-local]{background:#252836;color:#e2e8f0;border:1px solid #3d4166;border-radius:.3rem;padding:.3rem .5rem;font-size:.8rem;color-scheme:dark}
+.apply-btn{background:#7c3aed;color:#fff;border:none;border-radius:.3rem;padding:.3rem .7rem;font-size:.8rem;cursor:pointer}
+.apply-btn:hover{background:#6d28d9}
+
+select{background:#252836;color:#e2e8f0;border:1px solid #3d4166;border-radius:.375rem;padding:.3rem .55rem;font-size:.8rem;cursor:pointer}
+.sep{color:#3d4166;font-size:.75rem;padding:0 .15rem}
+.badge{font-size:.72rem;padding:.2rem .5rem;border-radius:.25rem;background:#252836;color:#64748b}
+
+/* ── Layout ── */
+main{padding:1.25rem;display:grid;gap:1.25rem}
+.section-title{font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#7c3aed;margin-bottom:.6rem}
+.charts-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:.75rem}
+.card{background:#1a1d27;border:1px solid #2d3148;border-radius:.5rem;padding:.9rem}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem}
+.card h3{font-size:.82rem;font-weight:600;color:#94a3b8}
+.chart-wrap{position:relative;height:175px}
+
+/* ── Table ── */
+.table-card{background:#1a1d27;border:1px solid #2d3148;border-radius:.5rem;padding:.9rem;margin-top:.75rem}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
 th{text-align:left;color:#64748b;font-weight:500;padding:.4rem .6rem;border-bottom:1px solid #2d3148}
-td{padding:.4rem .6rem;border-bottom:1px solid #1e2235;color:#cbd5e1}
-td:last-child{text-align:right;color:#a78bfa;font-weight:600}
+td{padding:.35rem .6rem;border-bottom:1px solid #1e2235;color:#cbd5e1;word-break:break-all}
+td:last-child{text-align:right;color:#a78bfa;font-weight:600;word-break:normal;white-space:nowrap}
 tr:hover td{background:#1e2235}
-.status-ok{color:#34d399}
-.status-warn{color:#fbbf24}
-.status-err{color:#f87171}
-.loading{color:#475569;font-size:.85rem;text-align:center;padding:2rem}
+.show-btn{background:transparent;color:#7c3aed;border:1px solid #4c1d95;border-radius:.3rem;padding:.25rem .6rem;font-size:.75rem;cursor:pointer;margin-top:.6rem}
+.show-btn:hover{background:#2d1f4a}
+.loading{color:#475569;font-size:.82rem;text-align:center;padding:1.5rem}
 </style>
 </head>
 <body>
 <header>
-  <h1>⚙ GoblinMetrics</h1>
-  <div class="controls">
-    <span class="badge" id="last-update">–</span>
-    <select id="range-select" title="Time range">
-      <option value="1">Last 1 h</option>
-      <option value="6">Last 6 h</option>
-      <option value="24">Last 24 h</option>
-    </select>
-    <select id="refresh-select" title="Auto-refresh">
-      <option value="5">Refresh 5 s</option>
-      <option value="10">Refresh 10 s</option>
-      <option value="30">Refresh 30 s</option>
-      <option value="60">Refresh 60 s</option>
-      <option value="0">Refresh Off</option>
-    </select>
+  <div class="header-top">
+    <h1>⚙ GoblinMetrics</h1>
+    <div class="controls">
+      <!-- Range presets -->
+      <div class="range-btns">
+        <button class="range-btn active" data-h="1">1h</button>
+        <button class="range-btn" data-h="6">6h</button>
+        <button class="range-btn" data-h="24">24h</button>
+        <button class="range-btn" data-h="168">7d</button>
+        <button class="range-btn" id="custom-btn" data-h="">Custom</button>
+      </div>
+      <span class="sep">|</span>
+      <!-- Bucket selector (shared for req-rate + status charts) -->
+      <label style="font-size:.78rem;color:#64748b">Bucket</label>
+      <select id="bucket-select">
+        <option value="second">Per second</option>
+        <option value="minute" selected>Per minute</option>
+        <option value="hour">Per hour</option>
+      </select>
+      <span class="sep">|</span>
+      <!-- Refresh -->
+      <select id="refresh-select">
+        <option value="5">Refresh 5s</option>
+        <option value="10" selected>Refresh 10s</option>
+        <option value="30">Refresh 30s</option>
+        <option value="60">Refresh 60s</option>
+        <option value="0">Refresh off</option>
+      </select>
+      <span class="badge" id="last-update">–</span>
+    </div>
+  </div>
+  <!-- Custom date range row -->
+  <div class="custom-row" id="custom-row">
+    <label style="font-size:.78rem;color:#64748b">From</label>
+    <input type="datetime-local" id="dt-from"/>
+    <label style="font-size:.78rem;color:#64748b">To</label>
+    <input type="datetime-local" id="dt-to"/>
+    <button class="apply-btn" id="apply-btn">Apply</button>
   </div>
 </header>
+
 <main>
+  <!-- System metrics -->
   <div>
     <div class="section-title">System</div>
     <div class="charts-row">
-      <div class="card"><h3>CPU Usage %</h3><div class="chart-wrap"><canvas id="cpu-chart"></canvas></div></div>
-      <div class="card"><h3>Memory Used %</h3><div class="chart-wrap"><canvas id="mem-chart"></canvas></div></div>
-      <div class="card"><h3>Load Average (1m)</h3><div class="chart-wrap"><canvas id="load-chart"></canvas></div></div>
+      <div class="card"><div class="card-head"><h3>CPU Usage %</h3></div><div class="chart-wrap"><canvas id="cpu-chart"></canvas></div></div>
+      <div class="card"><div class="card-head"><h3>Memory Used %</h3></div><div class="chart-wrap"><canvas id="mem-chart"></canvas></div></div>
+      <div class="card"><div class="card-head"><h3>Load Average (1m)</h3></div><div class="chart-wrap"><canvas id="load-chart"></canvas></div></div>
     </div>
   </div>
+
+  <!-- Nginx request metrics -->
   <div>
     <div class="section-title">Nginx Requests</div>
     <div class="charts-row">
-      <div class="card"><h3>Requests / min</h3><div class="chart-wrap"><canvas id="req-chart"></canvas></div></div>
-      <div class="card"><h3>Status Codes</h3><div class="chart-wrap"><canvas id="status-chart"></canvas></div></div>
-    </div>
-    <div class="charts-row" style="margin-top:1rem">
-      <div class="card" style="grid-column:1/-1">
-        <h3>Top URLs</h3>
-        <table id="url-table">
-          <thead><tr><th>URL</th><th>Requests</th></tr></thead>
-          <tbody><tr><td colspan="2" class="loading">Loading…</td></tr></tbody>
-        </table>
+      <div class="card">
+        <div class="card-head"><h3 id="req-title">Requests / min</h3></div>
+        <div class="chart-wrap"><canvas id="req-chart"></canvas></div>
       </div>
+      <div class="card">
+        <div class="card-head"><h3 id="status-title">Status Codes / min</h3></div>
+        <div class="chart-wrap"><canvas id="status-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Top URLs table -->
+    <div class="table-card">
+      <div class="card-head"><h3>Top URLs</h3></div>
+      <table id="url-table">
+        <thead><tr><th>URL</th><th>Requests</th></tr></thead>
+        <tbody><tr><td colspan="2" class="loading">Loading…</td></tr></tbody>
+      </table>
+      <button class="show-btn" id="url-toggle" style="display:none">Show all</button>
     </div>
   </div>
 </main>
+
 <script>
-const COLORS = {
+// ── Palette ───────────────────────────────────────────────────────────────────
+const C = {
   purple: 'rgba(124,58,237,.85)',
   green:  'rgba(52,211,153,.85)',
+  cyan:   'rgba(34,211,238,.85)',
+  blue:   'rgba(96,165,250,.85)',
   yellow: 'rgba(251,191,36,.85)',
   red:    'rgba(248,113,113,.85)',
-  blue:   'rgba(96,165,250,.85)',
-  cyan:   'rgba(34,211,238,.85)',
+  grey:   'rgba(148,163,184,.7)',
 };
-const PIE_COLORS = ['#34d399','#60a5fa','#fbbf24','#f87171','#a78bfa','#fb923c'];
+const STATUS_COLORS = {
+  '2': C.green, '3': C.blue, '4': C.yellow, '5': C.red,
+};
+function statusColor(code) {
+  return STATUS_COLORS[String(code)[0]] || C.grey;
+}
 const GRID = {color:'rgba(255,255,255,.05)'};
 const TICK = {color:'#64748b',font:{size:10}};
 
+// ── State ─────────────────────────────────────────────────────────────────────
+let range = { from: null, to: null, hours: 1 }; // null from/to → use hours
+let cachedTopUrls = [];     // 10-row cache
+let showAllUrls = false;
+
+// ── Chart factories ───────────────────────────────────────────────────────────
 function lineChart(id, label, color) {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
     type: 'line',
-    data: {labels: [], datasets: [{label, data: [], borderColor: color,
-      backgroundColor: color.replace('.85)', '.15)'), borderWidth: 1.5,
-      pointRadius: 0, tension: 0.3, fill: true}]},
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: {legend:{display:false}},
-      scales: {
-        x: {grid: GRID, ticks: {...TICK, maxTicksLimit: 6}},
-        y: {grid: GRID, ticks: TICK, beginAtZero: true}
-      }
-    }
+    data: {labels:[], datasets:[{label, data:[], borderColor:color,
+      backgroundColor:color.replace('.85)','.12)'), borderWidth:1.5,
+      pointRadius:0, tension:0.3, fill:true}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{grid:GRID,ticks:{...TICK,maxTicksLimit:7}},
+              y:{grid:GRID,ticks:TICK,beginAtZero:true}}}
   });
 }
 
 function barChart(id, label, color) {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
-    type: 'bar',
-    data: {labels: [], datasets: [{label, data: [], backgroundColor: color, borderRadius: 2}]},
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: {legend:{display:false}},
-      scales: {
-        x: {grid: GRID, ticks: {...TICK, maxTicksLimit: 8}},
-        y: {grid: GRID, ticks: TICK, beginAtZero: true}
-      }
-    }
+    type:'bar',
+    data:{labels:[],datasets:[{label,data:[],backgroundColor:color,borderRadius:2}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9}},
+              y:{grid:GRID,ticks:TICK,beginAtZero:true}}}
   });
 }
 
-function pieChart(id) {
+function stackedBarChart(id) {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
-    type: 'doughnut',
-    data: {labels: [], datasets: [{data: [], backgroundColor: PIE_COLORS, borderWidth: 1, borderColor: '#1a1d27'}]},
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
-      plugins: {legend:{position:'right', labels:{color:'#94a3b8', font:{size:11}, boxWidth:12}}}
-    }
+    type:'bar',
+    data:{labels:[],datasets:[]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10}}},
+      scales:{
+        x:{grid:GRID,ticks:{...TICK,maxTicksLimit:9},stacked:true},
+        y:{grid:GRID,ticks:TICK,beginAtZero:true,stacked:true}
+      }}
   });
 }
 
 const charts = {
-  cpu:    lineChart('cpu-chart',  'CPU %',        COLORS.purple),
-  mem:    lineChart('mem-chart',  'Mem Used %',   COLORS.green),
-  load:   lineChart('load-chart', 'Load Avg 1m',  COLORS.cyan),
-  req:    barChart ('req-chart',  'Req/min',      COLORS.blue),
-  status: pieChart ('status-chart'),
+  cpu:    lineChart('cpu-chart',  'CPU %',       C.purple),
+  mem:    lineChart('mem-chart',  'Mem Used %',  C.green),
+  load:   lineChart('load-chart', 'Load Avg 1m', C.cyan),
+  req:    barChart ('req-chart',  'Requests',    C.blue),
+  status: stackedBarChart('status-chart'),
 };
 
-function fmtTime(ms) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtLabel(ms, bucketMs) {
   const d = new Date(ms);
+  if (bucketMs >= 3_600_000) {
+    return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' ' +
+           d.getHours().toString().padStart(2,'0') + ':00';
+  }
   return d.getHours().toString().padStart(2,'0') + ':' +
-         d.getMinutes().toString().padStart(2,'0');
+         d.getMinutes().toString().padStart(2,'0') +
+         (bucketMs < 60_000 ? ':' + d.getSeconds().toString().padStart(2,'0') : '');
 }
 
-function updateLine(chart, points, valueFn) {
-  chart.data.labels   = points.map(p => fmtTime(p.timestamp));
-  chart.data.datasets[0].data = points.map(valueFn);
-  chart.update('none');
+function bucketMs() {
+  const b = document.getElementById('bucket-select').value;
+  return b === 'second' ? 1000 : b === 'hour' ? 3_600_000 : 60_000;
+}
+function bucketLabel() {
+  const b = document.getElementById('bucket-select').value;
+  return b === 'second' ? 'req/s' : b === 'hour' ? 'req/h' : 'req/min';
+}
+
+function rangeParams() {
+  if (range.from && range.to) {
+    return `from=${range.from}&to=${range.to}`;
+  }
+  return `hours=${range.hours}`;
 }
 
 async function fetchJSON(url) {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(r.statusText);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
 
-function hours() { return document.getElementById('range-select').value; }
+function updateLine(chart, points) {
+  const bms = bucketMs();
+  chart.data.labels = points.map(p => fmtLabel(p.timestamp, bms));
+  chart.data.datasets[0].data = points.map(p => p.value);
+  chart.update('none');
+}
 
+// ── Status timeseries: build stacked datasets ─────────────────────────────────
+function buildStatusDatasets(rows) {
+  if (!rows.length) { charts.status.data.labels=[]; charts.status.data.datasets=[]; charts.status.update('none'); return; }
+
+  const bms = bucketMs();
+  const buckets = [...new Set(rows.map(r => r.bucket_ts))].sort((a,b)=>a-b);
+  const codes   = [...new Set(rows.map(r => r.status_code))].sort((a,b)=>a-b);
+
+  // index rows by bucket+code
+  const map = {};
+  rows.forEach(r => { map[`${r.bucket_ts}_${r.status_code}`] = r.count; });
+
+  charts.status.data.labels = buckets.map(ts => fmtLabel(ts, bms));
+  charts.status.data.datasets = codes.map(code => ({
+    label: String(code),
+    data:  buckets.map(ts => map[`${ts}_${code}`] || 0),
+    backgroundColor: statusColor(code),
+    borderRadius: 1,
+    borderWidth: 0,
+  }));
+  charts.status.update('none');
+}
+
+// ── Top URLs table ────────────────────────────────────────────────────────────
+function renderUrls(rows) {
+  const tbody = document.querySelector('#url-table tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="2" class="loading">No data yet</td></tr>';
+    document.getElementById('url-toggle').style.display = 'none';
+    return;
+  }
+  tbody.innerHTML = rows.map(r =>
+    `<tr><td>${escHtml(r.url)}</td><td>${r.count.toLocaleString()}</td></tr>`
+  ).join('');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Main refresh ──────────────────────────────────────────────────────────────
 async function refresh() {
-  const h = hours();
+  const rp  = rangeParams();
+  const bkt = document.getElementById('bucket-select').value;
+
   try {
-    const [cpu, mem, load, ts, sc, tu] = await Promise.all([
-      fetchJSON(`/api/metrics?name=cpu_usage_pct&hours=${h}`),
-      fetchJSON(`/api/metrics?name=memory_used_pct&hours=${h}`),
-      fetchJSON(`/api/metrics?name=load_avg_1m&hours=${h}`),
-      fetchJSON(`/api/requests/timeseries?hours=${h}`),
-      fetchJSON(`/api/requests/status_codes?hours=${h}`),
-      fetchJSON(`/api/requests/top_urls?hours=${h}&limit=10`),
+    const [cpu, mem, load, ts, stTs, tu] = await Promise.all([
+      fetchJSON(`/api/metrics?name=cpu_usage_pct&${rp}`),
+      fetchJSON(`/api/metrics?name=memory_used_pct&${rp}`),
+      fetchJSON(`/api/metrics?name=load_avg_1m&${rp}`),
+      fetchJSON(`/api/requests/timeseries?${rp}&bucket=${bkt}`),
+      fetchJSON(`/api/requests/status_timeseries?${rp}&bucket=${bkt}`),
+      fetchJSON(`/api/requests/top_urls?${rp}&limit=10`),
     ]);
 
-    updateLine(charts.cpu,  cpu,  p => p.value.toFixed(1));
-    updateLine(charts.mem,  mem,  p => p.value.toFixed(1));
-    updateLine(charts.load, load, p => p.value.toFixed(2));
+    updateLine(charts.cpu,  cpu);
+    updateLine(charts.mem,  mem);
+    updateLine(charts.load, load);
 
-    charts.req.data.labels = ts.map(p => fmtTime(p.bucket_ts));
+    // Request rate
+    const bms = bucketMs();
+    charts.req.data.labels = ts.map(p => fmtLabel(p.bucket_ts, bms));
     charts.req.data.datasets[0].data = ts.map(p => p.count);
     charts.req.update('none');
 
-    charts.status.data.labels = sc.map(p => String(p.status_code));
-    charts.status.data.datasets[0].data = sc.map(p => p.count);
-    charts.status.update('none');
+    const lbl = bucketLabel();
+    document.getElementById('req-title').textContent  = `Requests / ${lbl.replace('req/','')}`;
+    document.getElementById('status-title').textContent = `Status Codes / ${lbl.replace('req/','')}`;
 
-    const tbody = document.querySelector('#url-table tbody');
-    if (tu.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="2" class="loading">No data yet</td></tr>';
-    } else {
-      tbody.innerHTML = tu.map(r =>
-        `<tr><td>${r.url}</td><td>${r.count.toLocaleString()}</td></tr>`
-      ).join('');
+    buildStatusDatasets(stTs);
+
+    // Top URLs
+    cachedTopUrls = tu;
+    if (!showAllUrls) {
+      renderUrls(tu);
+      if (tu.length === 10) {
+        const btn = document.getElementById('url-toggle');
+        btn.textContent = 'Show all';
+        btn.style.display = 'block';
+      } else {
+        document.getElementById('url-toggle').style.display = 'none';
+      }
     }
 
     document.getElementById('last-update').textContent =
@@ -203,6 +339,49 @@ async function refresh() {
   }
 }
 
+// ── Controls wiring ───────────────────────────────────────────────────────────
+
+// Preset range buttons
+document.querySelectorAll('.range-btn[data-h]').forEach(btn => {
+  if (!btn.dataset.h) return; // skip Custom
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('custom-row').classList.remove('open');
+    range = { from: null, to: null, hours: parseFloat(btn.dataset.h) };
+    refresh();
+  });
+});
+
+// Custom button
+document.getElementById('custom-btn').addEventListener('click', () => {
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('custom-btn').classList.add('active');
+  const row = document.getElementById('custom-row');
+  row.classList.toggle('open');
+  // Pre-fill inputs with current range
+  const now = new Date();
+  const from = new Date(now - (range.hours || 1) * 3_600_000);
+  document.getElementById('dt-to').value   = toDatetimeLocal(now);
+  document.getElementById('dt-from').value = toDatetimeLocal(from);
+});
+
+// Apply custom range
+document.getElementById('apply-btn').addEventListener('click', () => {
+  const from = document.getElementById('dt-from').value;
+  const to   = document.getElementById('dt-to').value;
+  if (!from || !to) return;
+  range = { from: new Date(from).getTime(), to: new Date(to).getTime(), hours: null };
+  refresh();
+});
+
+// Bucket change
+document.getElementById('bucket-select').addEventListener('change', () => {
+  localStorage.setItem('goblin-bucket', document.getElementById('bucket-select').value);
+  refresh();
+});
+
+// Refresh interval
 let timer = null;
 function scheduleRefresh() {
   if (timer) clearInterval(timer);
@@ -210,17 +389,47 @@ function scheduleRefresh() {
   localStorage.setItem('goblin-refresh', secs);
   if (secs > 0) timer = setInterval(refresh, secs * 1000);
 }
+document.getElementById('refresh-select').addEventListener('change', scheduleRefresh);
 
-// Restore saved settings
+// Show all / Show less URLs
+document.getElementById('url-toggle').addEventListener('click', async () => {
+  const btn = document.getElementById('url-toggle');
+  if (!showAllUrls) {
+    showAllUrls = true;
+    btn.textContent = 'Fetching…';
+    try {
+      const rp = rangeParams();
+      const all = await fetchJSON(`/api/requests/top_urls?${rp}&limit=0`);
+      renderUrls(all);
+      btn.textContent = `Show less (${cachedTopUrls.length})`;
+    } catch(e) {
+      btn.textContent = 'Show all';
+      showAllUrls = false;
+    }
+  } else {
+    showAllUrls = false;
+    renderUrls(cachedTopUrls);
+    btn.textContent = 'Show all';
+  }
+});
+
+// ── Util ──────────────────────────────────────────────────────────────────────
+function toDatetimeLocal(d) {
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ── Restore saved prefs ───────────────────────────────────────────────────────
+const savedBucket = localStorage.getItem('goblin-bucket');
+if (savedBucket) {
+  const el = document.getElementById('bucket-select');
+  if ([...el.options].some(o => o.value === savedBucket)) el.value = savedBucket;
+}
 const savedRefresh = localStorage.getItem('goblin-refresh');
 if (savedRefresh) {
   const el = document.getElementById('refresh-select');
-  const opt = [...el.options].find(o => o.value === savedRefresh);
-  if (opt) el.value = savedRefresh;
+  if ([...el.options].some(o => o.value === savedRefresh)) el.value = savedRefresh;
 }
-
-document.getElementById('refresh-select').addEventListener('change', scheduleRefresh);
-document.getElementById('range-select').addEventListener('change', refresh);
 
 scheduleRefresh();
 refresh();

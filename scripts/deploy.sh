@@ -16,9 +16,14 @@ cd "$PROJECT_ROOT"
 cargo build --release 2>&1
 
 echo "==> Uploading binaries…"
-ssh "$REMOTE" "sudo mkdir -p $REMOTE_BIN && sudo chown $DEPLOY_USER:$DEPLOY_USER $REMOTE_BIN"
+ssh "$REMOTE" "mkdir -p /tmp/goblin-bins"
 scp target/release/log-ingestor target/release/sys-metrics target/release/web-ui \
-  "$REMOTE:$REMOTE_BIN/"
+  "$REMOTE:/tmp/goblin-bins/"
+ssh "$REMOTE" "sudo mkdir -p $REMOTE_BIN && \
+  sudo systemctl stop goblin-log-ingestor goblin-sys-metrics goblin-web-ui 2>/dev/null || true && \
+  for bin in log-ingestor sys-metrics web-ui; do \
+    sudo install -m 750 -o root -g goblin-metrics /tmp/goblin-bins/\$bin $REMOTE_BIN/\$bin; \
+  done"
 
 echo "==> Uploading migrations and deploy files…"
 ssh "$REMOTE" "mkdir -p /tmp/goblin-migrations /tmp/goblin-deploy"
@@ -51,10 +56,6 @@ sudo chmod g+r /var/log/nginx/*.log 2>/dev/null || true
 sudo mkdir -p /var/lib/goblin-metrics
 sudo chown goblin-metrics:goblin-metrics /var/lib/goblin-metrics
 sudo chmod 750 /var/lib/goblin-metrics
-
-# ── Binaries ──────────────────────────────────────────────────────────────────
-sudo chown root:goblin-metrics /opt/goblin-metrics/*
-sudo chmod 750 /opt/goblin-metrics/*
 
 # ── SQLite migrations ─────────────────────────────────────────────────────────
 if ! command -v sqlite3 &>/dev/null; then

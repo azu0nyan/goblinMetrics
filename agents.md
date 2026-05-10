@@ -72,6 +72,32 @@ Memory per service: ~900 KB each.
 
 Dashboard: `http://144.31.17.0:4444`
 
+---
+
+## Iteration 2 — UI & API Improvements
+**Date:** 2026-05-10  
+**Status:** ✅ Complete
+
+### What changed
+
+**API (`crates/web-ui/src/api.rs`)**
+- Replaced `hours` scalar with unified `RangeQuery { from?, to?, hours?, bucket? }` on all request endpoints
+- `from`/`to` are unix milliseconds; `hours` is a backward-compat shortcut
+- New `Bucket` enum: `second` (1 s), `minute` (60 s, default), `hour` (3600 s)
+- New endpoint: `GET /api/requests/status_timeseries?from=&to=&bucket=` — returns `[{bucket_ts, status_code, count}]` for stacked bar chart
+- `top_urls?limit=0` now returns up to 5000 URLs (SQLite `LIMIT -1`)
+
+**Frontend (`crates/web-ui/src/static/index.html`)**
+- Range controls: preset buttons (1h / 6h / 24h / 7d) + "Custom" expanding two `datetime-local` inputs with Apply button
+- Shared `Bucket` dropdown (per second / per minute / per hour) affecting both request-rate and status-code charts
+- Request rate chart: labels and title update dynamically with selected bucket
+- Status codes: doughnut replaced by stacked bar chart (2xx green, 3xx blue, 4xx yellow, 5xx red)
+- Top URLs: "Show all" button fetches unlimited results; "Show less" restores cached 10-row view
+
+**Tests**: 15/15 passing (added `status_timeseries_endpoint_returns_array`, `requests_timeseries_with_range_params`, `requests_timeseries_with_hours_param`, `top_urls_limit_zero_returns_all`)
+
+**Deploy fix**: `scripts/deploy.sh` now stops services before installing binaries (avoids "text file busy" error on re-deploy), using `sudo install` for atomic placement.
+
 ### Known issues / notes
 
 - The `goblin_metrics.log` nginx log is recreated (empty) on each nginx reload/restart. The log-ingestor detects file shrinkage and resets the offset automatically.
