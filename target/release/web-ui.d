@@ -1,0 +1,1 @@
+/home/azu/projects/goblinMetrics/target/release/web-ui: /home/azu/projects/goblinMetrics/crates/web-ui/src/../../../migrations/001_init.sql /home/azu/projects/goblinMetrics/crates/web-ui/src/api.rs /home/azu/projects/goblinMetrics/crates/web-ui/src/main.rs /home/azu/projects/goblinMetrics/crates/web-ui/src/static/index.html

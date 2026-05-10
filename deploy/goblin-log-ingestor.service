@@ -1,0 +1,19 @@
+[Unit]
+Description=GoblinMetrics log ingestor
+After=network.target
+
+[Service]
+Type=simple
+User=goblin-metrics
+Group=goblin-metrics
+Environment=DB_PATH=/var/lib/goblin-metrics/metrics.db
+Environment=LOG_FILE=/var/log/nginx/goblin_metrics.log
+Environment=RUST_LOG=log_ingestor=info
+ExecStart=/opt/goblin-metrics/log-ingestor
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=GoblinMetrics system metrics collector
+After=network.target
+
+[Service]
+Type=simple
+User=goblin-metrics
+Group=goblin-metrics
+Environment=DB_PATH=/var/lib/goblin-metrics/metrics.db
+Environment=RUST_LOG=sys_metrics=info
+ExecStart=/opt/goblin-metrics/sys-metrics
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

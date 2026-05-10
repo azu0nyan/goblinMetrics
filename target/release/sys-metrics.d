@@ -1,0 +1,1 @@
+/home/azu/projects/goblinMetrics/target/release/sys-metrics: /home/azu/projects/goblinMetrics/crates/sys-metrics/src/../../../migrations/001_init.sql /home/azu/projects/goblinMetrics/crates/sys-metrics/src/collectors.rs /home/azu/projects/goblinMetrics/crates/sys-metrics/src/main.rs
