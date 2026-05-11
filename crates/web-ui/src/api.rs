@@ -25,11 +25,12 @@ fn hours_to_ms(hours: f64) -> i64 {
 
 #[derive(Deserialize)]
 pub struct RangeQuery {
-    pub from:   Option<i64>,
-    pub to:     Option<i64>,
-    pub hours:  Option<f64>,
-    pub bucket: Option<Bucket>,
-    pub host:   Option<String>,
+    pub from:        Option<i64>,
+    pub to:          Option<i64>,
+    pub hours:       Option<f64>,
+    pub bucket:      Option<Bucket>,
+    pub host:        Option<String>,
+    pub path_prefix: Option<String>,
 }
 
 impl RangeQuery {
@@ -66,6 +67,23 @@ impl Bucket {
             Bucket::Minute => 60_000,
             Bucket::Hour   => 3_600_000,
         }
+    }
+}
+
+// ── Path-filter helpers ───────────────────────────────────────────────────────
+
+// SQL fragment added to all request queries.
+// ?4 = path prefix (NULL = no filter), ?5 = 1 to negate (NOT LIKE), 0 to include (LIKE).
+const PATH_FILTER_SQL: &str =
+    "AND (?4 IS NULL OR (CASE WHEN ?5 = 1 \
+     THEN (url NOT LIKE ?4 || '/%' AND url != ?4) \
+     ELSE (url LIKE ?4 || '/%' OR url = ?4) END))";
+
+fn path_parts(prefix: Option<&str>) -> (Option<&str>, i64) {
+    match prefix.filter(|s| !s.is_empty()) {
+        None                                    => (None, 0),
+        Some(p) if p.starts_with('!') => (Some(&p[1..]), 1),
+        Some(p)                                 => (Some(p), 0),
     }
 }
 
@@ -129,14 +147,44 @@ pub async fn get_metric_named(
 
 // ── /api/requests/hosts ──────────────────────────────────────────────────────
 
+#[derive(Serialize)]
+pub struct HostFilter {
+    pub label:       String,
+    pub host:        String,
+    pub path_prefix: Option<String>,
+}
+
 pub async fn requests_hosts(State(pool): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT host FROM requests WHERE host != '' ORDER BY host",
     )
     .fetch_all(&pool)
     .await?;
-    let hosts: Vec<String> = rows.into_iter().map(|(h,)| h).collect();
-    Ok(Json(hosts))
+
+    let mut filters: Vec<HostFilter> = Vec::new();
+
+    for (host,) in rows {
+        if host == "goblin.geno.su" {
+            filters.push(HostFilter {
+                label:       "goblin.geno.su".into(),
+                host:        host.clone(),
+                path_prefix: Some("!/goblin-metrics".into()),
+            });
+            filters.push(HostFilter {
+                label:       "metrics".into(),
+                host:        host.clone(),
+                path_prefix: Some("/goblin-metrics".into()),
+            });
+        } else {
+            filters.push(HostFilter {
+                label:       host.clone(),
+                host:        host.clone(),
+                path_prefix: None,
+            });
+        }
+    }
+
+    Ok(Json(filters))
 }
 
 // ── /api/requests/timeseries ─────────────────────────────────────────────────
@@ -154,12 +202,14 @@ pub async fn requests_timeseries(
     let (from, to) = q.resolve();
     let bucket_ms  = q.bucket_ms();
     let host       = q.host_filter();
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
     let sql = format!(
         "SELECT COUNT(*) as count, (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts
          FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
          GROUP BY bucket_ts
          ORDER BY bucket_ts ASC"
     );
@@ -168,6 +218,8 @@ pub async fn requests_timeseries(
         .bind(from)
         .bind(to)
         .bind(host)
+        .bind(path_val)
+        .bind(negate)
         .fetch_all(&pool)
         .await?;
 
@@ -194,6 +246,7 @@ pub async fn requests_status_timeseries(
     let (from, to) = q.resolve();
     let bucket_ms  = q.bucket_ms();
     let host       = q.host_filter();
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
     let sql = format!(
         "SELECT (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
@@ -201,6 +254,7 @@ pub async fn requests_status_timeseries(
          FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
          GROUP BY bucket_ts, status_code
          ORDER BY bucket_ts ASC, status_code ASC"
     );
@@ -209,6 +263,8 @@ pub async fn requests_status_timeseries(
         .bind(from)
         .bind(to)
         .bind(host)
+        .bind(path_val)
+        .bind(negate)
         .fetch_all(&pool)
         .await?;
 
@@ -233,19 +289,25 @@ pub async fn requests_status_codes(
 ) -> Result<impl IntoResponse, AppError> {
     let (from, to) = q.resolve();
     let host       = q.host_filter();
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
+    let sql = format!(
         "SELECT status_code, COUNT(*) FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
          GROUP BY status_code
-         ORDER BY status_code ASC",
-    )
-    .bind(from)
-    .bind(to)
-    .bind(host)
-    .fetch_all(&pool)
-    .await?;
+         ORDER BY status_code ASC"
+    );
+
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .bind(host)
+        .bind(path_val)
+        .bind(negate)
+        .fetch_all(&pool)
+        .await?;
 
     let data: Vec<StatusCodeCount> = rows
         .into_iter()
@@ -258,12 +320,13 @@ pub async fn requests_status_codes(
 
 #[derive(Deserialize)]
 pub struct TopUrlsQuery {
-    pub from:  Option<i64>,
-    pub to:    Option<i64>,
-    pub hours: Option<f64>,
-    pub host:  Option<String>,
+    pub from:        Option<i64>,
+    pub to:          Option<i64>,
+    pub hours:       Option<f64>,
+    pub host:        Option<String>,
+    pub path_prefix: Option<String>,
     #[serde(default = "default_limit")]
-    pub limit: i64,
+    pub limit:       i64,
 }
 fn default_limit() -> i64 { 10 }
 
@@ -281,21 +344,27 @@ pub async fn requests_top_urls(
     let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
     let host = q.host.as_deref().filter(|h| !h.is_empty());
     let sql_limit: i64 = if q.limit == 0 { 5000 } else { q.limit };
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
-    let rows: Vec<(String, i64)> = sqlx::query_as(
+    let sql = format!(
         "SELECT url, COUNT(*) AS count FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
          GROUP BY url
          ORDER BY count DESC
-         LIMIT ?4",
-    )
-    .bind(from)
-    .bind(to)
-    .bind(host)
-    .bind(sql_limit)
-    .fetch_all(&pool)
-    .await?;
+         LIMIT ?6"
+    );
+
+    let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .bind(host)
+        .bind(path_val)
+        .bind(negate)
+        .bind(sql_limit)
+        .fetch_all(&pool)
+        .await?;
 
     let data: Vec<UrlCount> = rows
         .into_iter()
@@ -320,22 +389,28 @@ pub async fn requests_top_ips(
     let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
     let host = q.host.as_deref().filter(|h| !h.is_empty());
     let sql_limit: i64 = if q.limit == 0 { 5000 } else { q.limit };
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
-    let rows: Vec<(String, i64)> = sqlx::query_as(
+    let sql = format!(
         "SELECT ip, COUNT(*) AS count FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
            AND ip != ''
          GROUP BY ip
          ORDER BY count DESC
-         LIMIT ?4",
-    )
-    .bind(from)
-    .bind(to)
-    .bind(host)
-    .bind(sql_limit)
-    .fetch_all(&pool)
-    .await?;
+         LIMIT ?6"
+    );
+
+    let rows: Vec<(String, i64)> = sqlx::query_as(&sql)
+        .bind(from)
+        .bind(to)
+        .bind(host)
+        .bind(path_val)
+        .bind(negate)
+        .bind(sql_limit)
+        .fetch_all(&pool)
+        .await?;
 
     let data: Vec<IpCount> = rows
         .into_iter()
@@ -359,6 +434,7 @@ pub async fn requests_latency(
     let (from, to) = q.resolve();
     let bucket_ms  = q.bucket_ms();
     let host       = q.host_filter();
+    let (path_val, negate) = path_parts(q.path_prefix.as_deref());
 
     let sql = format!(
         "SELECT (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
@@ -366,6 +442,7 @@ pub async fn requests_latency(
          FROM requests
          WHERE timestamp BETWEEN ?1 AND ?2
            AND (?3 IS NULL OR host = ?3)
+           {PATH_FILTER_SQL}
            AND method != ''
          GROUP BY bucket_ts
          ORDER BY bucket_ts ASC"
@@ -375,6 +452,8 @@ pub async fn requests_latency(
         .bind(from)
         .bind(to)
         .bind(host)
+        .bind(path_val)
+        .bind(negate)
         .fetch_all(&pool)
         .await?;
 

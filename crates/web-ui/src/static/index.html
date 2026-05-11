@@ -334,8 +334,18 @@ function rangeParams() {
   const base = (range.from && range.to)
     ? `from=${range.from}&to=${range.to}`
     : `hours=${range.hours}`;
-  const h = document.getElementById('host-select').value;
-  return h ? `${base}&host=${encodeURIComponent(h)}` : base;
+  const val = document.getElementById('host-select').value;
+  if (!val) return base;
+  let host, pathPrefix;
+  try {
+    const f = JSON.parse(val);
+    host = f.host; pathPrefix = f.path_prefix;
+  } catch {
+    host = val; pathPrefix = null;
+  }
+  let params = `${base}&host=${encodeURIComponent(host)}`;
+  if (pathPrefix) params += `&path_prefix=${encodeURIComponent(pathPrefix)}`;
+  return params;
 }
 
 async function fetchJSON(url) {
@@ -563,18 +573,24 @@ document.getElementById('api-clear-btn').addEventListener('click', () => {
 // Host filter
 document.getElementById('host-select').addEventListener('change', () => {
   localStorage.setItem('goblin-host', document.getElementById('host-select').value);
+  showAllUrls = false;
+  showAllIps  = false;
   refresh();
 });
 
 async function populateHosts() {
   try {
-    const hosts = await fetchJSON('api/requests/hosts');
+    const filters = await fetchJSON('api/requests/hosts');
     const sel   = document.getElementById('host-select');
     const saved = localStorage.getItem('goblin-host') || '';
-    hosts.forEach(h => {
+    filters.forEach(f => {
+      const val = f.path_prefix
+        ? JSON.stringify({ host: f.host, path_prefix: f.path_prefix })
+        : f.host;
       const opt = document.createElement('option');
-      opt.value = h; opt.textContent = h;
-      if (h === saved) opt.selected = true;
+      opt.value = val;
+      opt.textContent = f.label;
+      if (val === saved) opt.selected = true;
       sel.appendChild(opt);
     });
   } catch(e) { /* no hosts yet */ }
@@ -588,6 +604,8 @@ document.querySelectorAll('.range-btn[data-h]').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('custom-row').classList.remove('open');
     range = { from: null, to: null, hours: parseFloat(btn.dataset.h) };
+    showAllUrls = false;
+    showAllIps  = false;
     refresh();
   });
 });
@@ -610,12 +628,16 @@ document.getElementById('apply-btn').addEventListener('click', () => {
   const to   = document.getElementById('dt-to').value;
   if (!from || !to) return;
   range = { from: new Date(from).getTime(), to: new Date(to).getTime(), hours: null };
+  showAllUrls = false;
+  showAllIps  = false;
   refresh();
 });
 
 // Bucket change
 document.getElementById('bucket-select').addEventListener('change', () => {
   localStorage.setItem('goblin-bucket', document.getElementById('bucket-select').value);
+  showAllUrls = false;
+  showAllIps  = false;
   refresh();
 });
 

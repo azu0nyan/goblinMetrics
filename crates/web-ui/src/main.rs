@@ -75,6 +75,9 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_method ON requests(method)")
         .execute(pool)
         .await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_req_host_ts ON requests(host, timestamp)")
+        .execute(pool)
+        .await;
     Ok(())
 }
 
