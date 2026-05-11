@@ -1,66 +1,183 @@
-# GoblinMetrics — Agent Log
+# GoblinMetrics — Agent Reference
 
-## Iteration 1 — Initial Build & Deploy  
-**Date:** 2026-05-10  
-**Status:** ✅ Complete
+## Working Protocol
 
-### What was built
+Every task follows this sequence — no exceptions:
 
-Three Rust binaries in a Cargo workspace, deployed to `144.31.17.0` (Debian 13, 1 vCPU, ~966 MB RAM):
+1. **Code** — make the change
+2. **Compile** — `cargo check` (fast) or `cargo test` if logic changed
+3. **Deploy** — `bash scripts/deploy.sh` (builds release, uploads, restarts services)
+4. **Verify** — `curl` the affected endpoints; check service status
+5. **Update agents.md** — edit the relevant section in-place (schema, endpoints, features); do not just append another iteration block
 
-| Binary | Service | Purpose |
-|---|---|---|
-| `log-ingestor` | `goblin-log-ingestor.service` | Tails nginx JSON log → `requests` table |
-| `sys-metrics`  | `goblin-sys-metrics.service`  | Collects CPU/memory/load every 1 s → `metrics` table |
-| `web-ui`       | `goblin-web-ui.service`       | REST API + dashboard on port 4444 |
-
-### Infrastructure
-
-- **Database:** SQLite at `/var/lib/goblin-metrics/metrics.db`, WAL mode, `busy_timeout=5000`
-- **Service user:** `goblin-metrics` (system user, no login shell), member of `adm` group for nginx log read access
-- **Binaries:** `/opt/goblin-metrics/`
-- **Nginx log:** `/var/log/nginx/goblin_metrics.log` (JSON format via `goblin_json` log_format)
-
-### nginx config changes
-
-Added `/etc/nginx/conf.d/goblin-metrics-logging.conf` with the `goblin_json` log format (captures `remote_addr`, `time_local`, `request`, `status`, `user_agent`, `referer`, `accept`, `accept_language`, `x_forwarded_for`, `content_type`).
-
-Added `access_log /var/log/nginx/goblin_metrics.log goblin_json;` to both server blocks in `/etc/nginx/sites-enabled/goblin.geno.su`.
-
-### Database schema
-
-```sql
-requests(id, timestamp INTEGER ms, url, ip, user_agent, status_code, headers JSON)
-metrics(id, metric_name, metric_value REAL, timestamp INTEGER ms)
-ingestor_state(key, value)   -- tracks log-ingestor byte offset
+```bash
+# Typical verify after deploy
+ssh azu@144.31.17.0 "systemctl is-active goblin-log-ingestor goblin-sys-metrics goblin-web-ui"
+curl -s http://144.31.17.0:4444/health
+curl -s "http://144.31.17.0:4444/api/requests/top_ips?hours=1&limit=5"
+curl -s "http://144.31.17.0:4444/api/requests/latency?hours=1&bucket=minute"
 ```
 
-Indexes: `idx_req_ts`, `idx_req_ip`, `idx_req_status`, `idx_met_name_ts`
+---
 
-### API endpoints
+## System Overview
+
+Three Rust binaries in a Cargo workspace, deployed to `144.31.17.0` (Debian 13, 1 vCPU, ~966 MB RAM).
+
+**Shared paths:**
+- Binaries: `/opt/goblin-metrics/`
+- Database: `/var/lib/goblin-metrics/metrics.db` (SQLite, WAL mode, `busy_timeout=5000`)
+- Service user: `goblin-metrics` (system user, no login shell, `adm` group for nginx log access)
+- Dashboard: `http://144.31.17.0:4444` and proxied at `goblin.geno.su/goblin-metrics/`
+
+---
+
+## Services
+
+### `log-ingestor` — `goblin-log-ingestor.service`
+
+Tails the nginx JSON access log and inserts one row per request into the `requests` table.
+
+**Loop:** every 500 ms, opens `/var/log/nginx/goblin_metrics.log`, seeks to saved byte offset, reads all new complete lines, inserts a batch inside a single SQLite transaction, saves the new offset to `ingestor_state`. If the file is smaller than the saved offset (nginx reload/rotation), offset resets to 0.
+
+**Parsing** (`parser.rs`):
+- Deserialises each line as `RawEntry` JSON (nginx `goblin_json` format)
+- Parses `time_local` (`%d/%b/%Y:%H:%M:%S %z`) → unix milliseconds
+- Extracts URL from `request` field (`"GET /path HTTP/2.0"` → `"/path"`)
+- Extracts method — only accepts `GET POST PUT PATCH DELETE HEAD OPTIONS CONNECT TRACE`; anything else (bot TLS bytes) becomes `""`
+- `request_time` (seconds float) → `response_time_ms` (×1000)
+- Stores `referer`, `user_agent`, `accept`, `accept_language`, `x_forwarded_for`, `content_type` as a compact JSON `headers` blob
+
+**DB writes** (`db.rs`): uses `INSERT OR IGNORE` (primary key dedup). Byte offset persisted via `INSERT … ON CONFLICT DO UPDATE` in `ingestor_state`.
+
+**Input:** reads with `read_until(b'\n')` + `from_utf8_lossy` — necessary because nginx `escape=json` does not escape raw bytes above 0x7F (TLS ClientHello data hitting port 80 produces non-UTF-8 lines).
+
+**Env vars:** `DB_PATH`, `LOG_FILE`, `RUST_LOG=log_ingestor=info`  
+**Restart:** `always`, `RestartSec=5`
+
+---
+
+### `sys-metrics` — `goblin-sys-metrics.service`
+
+Collects CPU, memory, and load average every second and inserts 5 rows per tick into the `metrics` table.
+
+**Loop:** Tokio `interval(1s)`. Each tick calls three collectors then commits a single transaction writing all samples at the same `timestamp` (unix ms at tick start).
+
+**Collectors** (`collectors.rs`):
+
+| Metric name | Source | Method |
+|---|---|---|
+| `cpu_usage_pct` | `/proc/stat` | Reads `cpu` line twice 100 ms apart; `(total_diff - idle_diff) / total_diff × 100` |
+| `memory_used_mb` | `/proc/meminfo` | `MemTotal - MemAvailable` in MB |
+| `memory_free_mb` | `/proc/meminfo` | `MemAvailable` in MB |
+| `memory_used_pct` | `/proc/meminfo` | `(MemTotal - MemAvailable) / MemTotal × 100` |
+| `load_avg_1m` | `/proc/loadavg` | First whitespace token, parsed as f64 |
+
+Note: the 100 ms CPU sleep happens inside each 1-second tick, so each collection consumes ~100 ms of the interval.
+
+**Env vars:** `DB_PATH`, `RUST_LOG=sys_metrics=info`  
+**Restart:** `always`, `RestartSec=5`
+
+---
+
+### `web-ui` — `goblin-web-ui.service`
+
+Axum HTTP server exposing the REST API and serving the single-page dashboard (`index.html` embedded at compile time via `include_str!`).
+
+**Startup:** connects to SQLite, sets WAL + busy_timeout, runs `run_migrations()` (idempotent `ALTER TABLE` + `CREATE INDEX IF NOT EXISTS` calls, errors suppressed), then binds on `BIND_ADDR`.
+
+**Middleware:** `tower_http::CompressionLayer` — compresses all responses.
+
+**Route handlers** (`api.rs`): all share `AppState = SqlitePool`. Common query type `RangeQuery { from?, to?, hours?, bucket?, host? }` — `resolve()` returns `(from_ms, to_ms)`; missing `to` defaults to now, missing `from` defaults to `now - hours×3600000`. Host filter applied as `AND (?N IS NULL OR host = ?N)`.
+
+**Nginx integration:**  
+- `deploy/nginx-logging.conf` → `/etc/nginx/conf.d/goblin-metrics-logging.conf`: defines `goblin_json` log_format capturing `remote_addr`, `time_local`, `request`, `status`, `body_bytes_sent`, `referer`, `user_agent`, `accept`, `accept_language`, `x_forwarded_for`, `content_type`, `host`, `request_time`
+- `deploy/nginx-metrics-location.conf` → `/etc/nginx/snippets/goblin-metrics.conf`: proxies `goblin.geno.su/goblin-metrics/` → `127.0.0.1:4444`
+
+**Env vars:** `DB_PATH`, `BIND_ADDR` (default `0.0.0.0:4444`), `RUST_LOG=web_ui=info`  
+**Restart:** `always`, `RestartSec=5`
+
+---
+
+## Database Schema
+
+```sql
+requests(
+  id INTEGER PK,
+  timestamp INTEGER NOT NULL,        -- unix ms
+  url TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  host TEXT DEFAULT '',
+  method TEXT DEFAULT '',            -- HTTP verb; '' for non-HTTP/bot traffic
+  response_time_ms REAL DEFAULT 0,   -- nginx $request_time * 1000
+  user_agent TEXT,
+  status_code INTEGER NOT NULL,
+  headers TEXT                       -- JSON
+)
+-- Indexes: idx_req_ts, idx_req_ip, idx_req_status, idx_req_host, idx_req_method
+
+metrics(
+  id INTEGER PK,
+  metric_name TEXT NOT NULL,
+  metric_value REAL NOT NULL,
+  timestamp INTEGER NOT NULL         -- unix ms
+)
+-- Index: idx_met_name_ts
+
+ingestor_state(key TEXT PK, value TEXT)  -- log-ingestor byte offset
+```
+
+Migrations run idempotently at startup via `run_migrations()` in both binaries. New columns use `ALTER TABLE … IF NOT EXISTS` pattern (errors suppressed). Migration files in `migrations/`.
+
+---
+
+## API Endpoints
+
+All request endpoints accept `from` + `to` (unix ms) **or** `hours` (float, default 1). Optional `host` filter. Bucket endpoints accept `bucket=second|minute|hour`.
 
 ```
 GET /health
 GET /api/metrics/names
 GET /api/metrics?name=<n>&hours=<h>
-GET /api/requests/timeseries?hours=<h>
-GET /api/requests/status_codes?hours=<h>
-GET /api/requests/top_urls?hours=<h>&limit=<n>
+GET /api/requests/hosts
+GET /api/requests/timeseries?hours=<h>&bucket=<b>&host=<h>
+GET /api/requests/status_timeseries?hours=<h>&bucket=<b>&host=<h>
+GET /api/requests/status_codes?hours=<h>&host=<h>
+GET /api/requests/latency?hours=<h>&bucket=<b>&host=<h>
+GET /api/requests/top_urls?hours=<h>&limit=<n>&host=<h>   -- limit=0 → all (cap 5000)
+GET /api/requests/top_ips?hours=<h>&limit=<n>&host=<h>    -- limit=0 → all (cap 5000)
 ```
 
-### Tests
+---
 
-12 tests across all three crates — all pass (`cargo test`).
+## Dashboard Features
 
-### Deployment
+**Global controls:** range presets (1h/6h/24h/7d) + custom datetime range, bucket selector (per second/minute/hour), host filter (populated from `/api/requests/hosts`), auto-refresh (5s/10s/30s/60s/off). All prefs persisted in `localStorage`.
+
+**System section:** CPU %, Memory Used %, Load Average 1m — line charts from `metrics` table.
+
+**Nginx Requests section:**
+- Requests/bucket — bar or line (toggle ▬/∿, persisted)
+- Status Codes/bucket — stacked bar or line (toggle ▬/∿, persisted)
+- Avg Backend Latency — single line, avg `response_time_ms` per bucket from nginx logs
+- Dashboard API Latency — client-measured `performance.now()` per endpoint; timestamps rounded to nearest second so co-fetched endpoints share x-axis; `spanGaps: true`; ⟲ clear button
+- Top URLs + Top IPs — side-by-side tables, Show all / Show less toggle (Show all fetches `limit=0`)
+
+---
+
+## Deployment
 
 ```bash
-DEPLOY_USER=azu DEPLOY_HOST=144.31.17.0 bash scripts/deploy.sh
+bash scripts/deploy.sh
+# Builds locally (x86_64 Linux release), uploads binaries + migrations + systemd units,
+# sets up goblin-metrics user, runs migrations, configures nginx snippet, restarts services.
 ```
 
-Builds locally (x86_64 Linux), uploads with `scp`, sets up user/permissions, runs migrations, configures nginx, installs systemd units.
+Services restart order: `goblin-log-ingestor` → `goblin-sys-metrics` → `goblin-web-ui`.  
+The script stops services before installing binaries (avoids "text file busy").  
+Nginx reload emits a deprecation warning about `listen … http2` — harmless, config test passes.
 
-### Current system status
+**Current service status (last deploy: 2026-05-11):**
 
 | Service | State |
 |---|---|
@@ -68,171 +185,23 @@ Builds locally (x86_64 Linux), uploads with `scp`, sets up user/permissions, run
 | `goblin-sys-metrics`  | active (running) |
 | `goblin-web-ui`       | active (running) |
 
-Memory per service: ~900 KB each.
-
-Dashboard: `http://144.31.17.0:4444`
+Memory per service: ~1–1.4 MB each.
 
 ---
 
-## Iteration 2 — UI & API Improvements
-**Date:** 2026-05-10  
-**Status:** ✅ Complete
+## Tests
 
-### What changed
+```bash
+cargo test
+```
 
-**API (`crates/web-ui/src/api.rs`)**
-- Replaced `hours` scalar with unified `RangeQuery { from?, to?, hours?, bucket? }` on all request endpoints
-- `from`/`to` are unix milliseconds; `hours` is a backward-compat shortcut
-- New `Bucket` enum: `second` (1 s), `minute` (60 s, default), `hour` (3600 s)
-- New endpoint: `GET /api/requests/status_timeseries?from=&to=&bucket=` — returns `[{bucket_ts, status_code, count}]` for stacked bar chart
-- `top_urls?limit=0` now returns up to 5000 URLs (SQLite `LIMIT -1`)
-
-**Frontend (`crates/web-ui/src/static/index.html`)**
-- Range controls: preset buttons (1h / 6h / 24h / 7d) + "Custom" expanding two `datetime-local` inputs with Apply button
-- Shared `Bucket` dropdown (per second / per minute / per hour) affecting both request-rate and status-code charts
-- Request rate chart: labels and title update dynamically with selected bucket
-- Status codes: doughnut replaced by stacked bar chart (2xx green, 3xx blue, 4xx yellow, 5xx red)
-- Top URLs: "Show all" button fetches unlimited results; "Show less" restores cached 10-row view
-
-**Tests**: 15/15 passing (added `status_timeseries_endpoint_returns_array`, `requests_timeseries_with_range_params`, `requests_timeseries_with_hours_param`, `top_urls_limit_zero_returns_all`)
-
-**Deploy fix**: `scripts/deploy.sh` now stops services before installing binaries (avoids "text file busy" error on re-deploy), using `sudo install` for atomic placement.
-
-### Known issues / notes
-
-- The `goblin_metrics.log` nginx log is recreated (empty) on each nginx reload/restart. The log-ingestor detects file shrinkage and resets the offset automatically.
-- The log-ingestor sleeps 500 ms between polls; ingestion latency is < 1 second under normal load.
-- `sys-metrics` reads `/proc/stat` twice 100 ms apart to compute CPU usage delta — this means one tick consumes 100 ms of the 1-second interval.
+22 tests across all three crates. Tests use in-memory SQLite (`":memory:"`). Key coverage: host filtering, bucket aggregation, latency averaging, `limit=0` URL fetch, migration idempotency.
 
 ---
 
-## Iteration 3 — Gitignore, Bar/Line Toggle, Host Filtering
-**Date:** 2026-05-10  
-**Status:** ✅ Complete
+## Known Behaviours / Gotchas
 
-### What changed
-
-**`.gitignore`** (new)  
-Standard Rust ignores: `/target/`, `**/*.rs.bk`, `.env`, `*.db`, `*.db-wal`, `*.db-shm`. `Cargo.lock` is tracked (binary workspace convention).
-
-**Database schema**  
-Added `host TEXT DEFAULT ''` column to `requests` table.  
-Migration strategy:
-- `migrations/001_init.sql` — `host` column included for fresh installs; `idx_req_host` deliberately absent (would fail on existing DBs via `sqlite3` CLI before the column is added)
-- `migrations/002_add_host.sql` — `ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''` for existing installs (deploy script runs with `2>/dev/null || true`)
-- `run_migrations()` in both binaries runs the `ALTER TABLE` and `CREATE INDEX IF NOT EXISTS idx_req_host` inline via sqlx, ignoring errors for idempotency
-
-**nginx logging**  
-Added `"host":"$host"` as last field in `goblin_json` log_format in `deploy/nginx-logging.conf`.
-
-**log-ingestor (`crates/log-ingestor/`)**  
-- `parser.rs`: `LogEntry` and `RawEntry` gain `host: String` (`#[serde(default)]` handles old log lines)
-- `db.rs`: `INSERT` statement includes `host` as `?4`
-- `main.rs`: `read_line` replaced with `read_until(b'\n')` + `String::from_utf8_lossy` — nginx's `escape=json` does not escape raw bytes above 0x7F (e.g. TLS ClientHello data hitting the HTTP port), which caused `read_line` to error on every poll
-
-**web-ui (`crates/web-ui/src/`)**  
-- `api.rs`: `RangeQuery` and `TopUrlsQuery` gain `host: Option<String>`; all `requests` SQL queries add `AND (?N IS NULL OR host = ?N)`; new `requests_hosts` handler returns distinct non-empty hosts
-- `main.rs`: new route `GET /api/requests/hosts`; 2 new tests (`requests_hosts_endpoint_returns_array`, `requests_timeseries_with_host_filter`)
-
-**Frontend (`crates/web-ui/src/static/index.html`)**  
-- **Host dropdown**: populated from `/api/requests/hosts` on load; selected host appended to all API calls via `rangeParams()`; selection persisted in `localStorage`
-- **Bar/line toggle**: `▬` button on the RPS card swaps the chart type between bar and line in-place (preserves current data); state persisted in `localStorage`; icon switches to `∿` in line mode
-
-### API additions
-
-```
-GET /api/requests/hosts                                    → ["goblin.geno.su", ...]
-GET /api/requests/timeseries?hours=1&host=goblin.geno.su   → filtered timeseries
-GET /api/requests/status_codes?hours=1&host=goblin.geno.su → filtered status codes
-GET /api/requests/top_urls?hours=1&host=goblin.geno.su     → filtered top URLs
-```
-
-### Tests
-
-18 tests across all three crates — all pass.
-
-### Bug fixed during deploy
-
-`read_line` (requires valid UTF-8) crashed on log lines containing raw TLS handshake bytes logged by nginx when bots hit port 80 with HTTPS clients. Fixed by switching to `read_until(b'\n', &mut Vec<u8>)` and decoding with `from_utf8_lossy`.
-
----
-
-## Iteration 4 — Latency, Tooltips, Status Toggle, Method Chart
-**Date:** 2026-05-10  
-**Status:** ✅ Complete
-
-### What changed
-
-**nginx logging (`deploy/nginx-logging.conf`)**  
-Added `"request_time":$request_time` (bare float, seconds) as the last field in `goblin_json`.
-
-**Database schema**  
-Two new columns on `requests`:
-- `method TEXT DEFAULT ''` — HTTP verb extracted from the `request` field
-- `response_time_ms REAL DEFAULT 0` — `nginx $request_time * 1000`
-
-Migration strategy identical to iteration 3:
-- `migrations/001_init.sql` — columns included for fresh installs; index omitted
-- `migrations/003_add_latency.sql` — `ALTER TABLE` for existing installs (deploy runs with `2>/dev/null || true`)
-- `run_migrations()` in both binaries — inline `ALTER TABLE` + `CREATE INDEX IF NOT EXISTS idx_req_method`
-
-**log-ingestor (`crates/log-ingestor/`)**  
-- `parser.rs`: `RawEntry` gains `request_time: f64` (`#[serde(default)]`); `LogEntry` gains `method: String` and `response_time_ms: f64`; new `extract_method()` filters to known HTTP verbs only (non-verb tokens → `""`, handles garbage from TLS bots)
-- `db.rs`: INSERT now writes 9 columns including `method` and `response_time_ms`
-
-**web-ui (`crates/web-ui/src/`)**  
-- `api.rs`: new `LatencyPoint { bucket_ts, method, avg_ms }` and `requests_latency_by_method` handler — groups by `(bucket_ts, method)`, filters `method != ''`
-- `main.rs`: route `GET /api/requests/latency_by_method`; 2 new tests
-
-**Frontend (`crates/web-ui/src/static/index.html`)**  
-- **Hover tooltips**: `lineChart()` and `barChart()` accept a `suffix` parameter (`'%'`, `' req'`, `''`); tooltip label callbacks format as `"Label: value[suffix]"`. Stacked charts use `tooltip: { mode: 'index' }` showing all series at a cursor position
-- **Status chart toggle**: `▬`/`∿` button on the status codes card, same pattern as RPS toggle. New `stackedLineChart()` factory for line mode. Toggle preserves current datasets and persists to localStorage
-- **Latency chart**: New `Response Time by Method` card between status codes and top URLs. `multiLineChart()` factory with ms y-axis label. `buildLatencyDatasets()` builds one line per method (GET=blue, POST=green, PUT=yellow, DELETE=red, PATCH=cyan, HEAD=purple). Null-fills missing (bucket, method) pairs; `spanGaps: false`
-
-### API additions
-
-```
-GET /api/requests/latency_by_method?hours=1&bucket=minute&host=goblin.geno.su
-→ [{"bucket_ts":..., "method":"GET", "avg_ms":4.0}, ...]
-```
-
-### Tests
-
-22 tests across all three crates — all pass.
-
-### Bug fixed during deploy
-
-The `response_time_ms > 0` filter in the latency query excluded nginx 301 redirects (processed in ~0ms, `request_time: 0.000`). Fixed by removing the filter — `method != ''` alone is sufficient to skip rows with no latency data.
-
----
-
-## Iteration 5 — Status Toggle Fix, Split Latency Metrics
-**Date:** 2026-05-10  
-**Status:** ✅ Complete
-
-### What changed
-
-**Bug fix — status codes line mode**  
-`buildStatusDatasets()` set `borderWidth: 0` (fine for bars but invisible lines). Changed to `borderWidth: 1.5` and added `pointRadius: 0`, `tension: 0.3`, `fill: true` so datasets render correctly in both bar and stacked-line modes.
-
-**Latency split into two distinct metrics**  
-Per user request, the single "Response Time by Method" chart was replaced with two specialized charts:
-
-1. **Avg Backend Latency (nginx logs)** — single line, overall avg from nginx `$request_time`, respects the global host filter.
-2. **Dashboard API Latency (UI-measured)** — multi-line chart, measured client-side via `performance.now()` around each `fetchJSON` call. One line per dashboard API endpoint (`metrics`, `requests/timeseries`, etc.). Rolling window of 60 timings per endpoint. Manual clear button (⟲).
-
-**API changes (`crates/web-ui/src/api.rs` + `main.rs`)**  
-- Removed `requests_latency_by_method` handler / route
-- Added `requests_latency` handler (single avg per bucket) + `/api/requests/latency` route
-- `LatencyPoint` struct shrunk: `{ bucket_ts, avg_ms }` (no `method`)
-- Tests renamed: `latency_endpoint_returns_array`, `latency_endpoint_averages_across_methods`
-
-**Frontend (`crates/web-ui/src/static/index.html`)**  
-- `fetchJSON()` wrapped to record `(timestamp, ms)` per endpoint into in-memory `apiTimings` map
-- Removed `methodColor`/`METHOD_COLORS`; added `endpointColor(i)` cycling through the palette
-- New `updateLatency(rows)` for the single-line backend latency chart
-- New `buildApiLatencyDatasets()` for the multi-line dashboard chart, aligning all endpoints' timings on a unified label axis (null gaps, `spanGaps: false`)
-
-### Tests
-
-22 tests across all three crates — all pass.
+- **Bot traffic / TLS on port 80**: nginx logs raw TLS handshake bytes; log-ingestor uses `read_until(b'\n')` + `from_utf8_lossy` to handle non-UTF-8 safely. `method` is filtered to known HTTP verbs only — garbage becomes `''`.
+- **nginx log reset**: log is recreated empty on nginx reload. Log-ingestor detects file shrinkage and resets byte offset automatically.
+- **Latency filter**: `WHERE method != ''` skips bot/TLS rows. `response_time_ms = 0` rows (e.g. 301 redirects) are intentionally included.
+- **API latency chart**: all dashboard fetches happen in `Promise.all`, completing within ms of each other. Timestamps are rounded to the nearest second to align all endpoints on a shared x-axis point per refresh cycle.

@@ -304,6 +304,46 @@ pub async fn requests_top_urls(
     Ok(Json(data))
 }
 
+// ── /api/requests/top_ips ────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct IpCount {
+    pub ip:    String,
+    pub count: i64,
+}
+
+pub async fn requests_top_ips(
+    State(pool): State<AppState>,
+    Query(q): Query<TopUrlsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let to   = q.to.unwrap_or_else(now_ms);
+    let from = q.from.unwrap_or_else(|| to - hours_to_ms(q.hours.unwrap_or(1.0)));
+    let host = q.host.as_deref().filter(|h| !h.is_empty());
+    let sql_limit: i64 = if q.limit == 0 { 5000 } else { q.limit };
+
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT ip, COUNT(*) AS count FROM requests
+         WHERE timestamp BETWEEN ?1 AND ?2
+           AND (?3 IS NULL OR host = ?3)
+           AND ip != ''
+         GROUP BY ip
+         ORDER BY count DESC
+         LIMIT ?4",
+    )
+    .bind(from)
+    .bind(to)
+    .bind(host)
+    .bind(sql_limit)
+    .fetch_all(&pool)
+    .await?;
+
+    let data: Vec<IpCount> = rows
+        .into_iter()
+        .map(|(ip, count)| IpCount { ip, count })
+        .collect();
+    Ok(Json(data))
+}
+
 // ── /api/requests/latency ───────────────────────────────────────────────────
 
 #[derive(Serialize, sqlx::FromRow)]

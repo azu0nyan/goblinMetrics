@@ -50,6 +50,7 @@ pub fn build_app(pool: SqlitePool) -> Router {
         .route("/api/requests/status_timeseries", get(api::requests_status_timeseries))
         .route("/api/requests/status_codes", get(api::requests_status_codes))
         .route("/api/requests/top_urls", get(api::requests_top_urls))
+        .route("/api/requests/top_ips", get(api::requests_top_ips))
         .route("/api/requests/latency", get(api::requests_latency))
         .layer(CompressionLayer::new())
         .with_state(pool)

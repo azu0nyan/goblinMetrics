@@ -30,6 +30,7 @@ ssh "$REMOTE" "mkdir -p /tmp/goblin-migrations /tmp/goblin-deploy"
 scp migrations/001_init.sql migrations/002_add_host.sql migrations/003_add_latency.sql "$REMOTE:/tmp/goblin-migrations/"
 scp deploy/goblin-log-ingestor.service deploy/goblin-sys-metrics.service \
     deploy/goblin-web-ui.service deploy/nginx-logging.conf \
+    deploy/nginx-metrics-location.conf \
   "$REMOTE:/tmp/goblin-deploy/"
 
 echo "==> Server setup…"
@@ -80,6 +81,32 @@ if ! grep -q goblin_metrics.log "$SITE"; then
     "$SITE"
   echo "  nginx site updated"
 fi
+
+# Mount dashboard at goblin.geno.su/goblin-metrics/ (proxy to 127.0.0.1:4444).
+# 1) Install snippet, 2) inject `include` into the 443 server block if absent.
+sudo mkdir -p /etc/nginx/snippets
+sudo cp /tmp/goblin-deploy/nginx-metrics-location.conf \
+  /etc/nginx/snippets/goblin-metrics.conf
+
+if ! sudo grep -q 'snippets/goblin-metrics.conf' "$SITE"; then
+  # Insert `include` directive before the `location / {` block in the 2nd server
+  # block (the 443/SSL one), so the metrics location wins over the catch-all `/`.
+  sudo awk '
+    /^server[[:space:]]*\{/ { server_count++ }
+    server_count == 2 && !done && /^    location \/ \{/ {
+      print "    include /etc/nginx/snippets/goblin-metrics.conf;"
+      print ""
+      done = 1
+    }
+    { print }
+  ' "$SITE" > /tmp/goblin-site.new && \
+    sudo install -m 644 /tmp/goblin-site.new "$SITE" && \
+    rm /tmp/goblin-site.new
+  echo "  goblin-metrics include injected into goblin.geno.su"
+fi
+
+# Clean up old subdomain config if it exists from a prior deploy
+sudo rm -f /etc/nginx/sites-enabled/metrics.goblin.geno.su
 
 sudo nginx -t
 sudo systemctl reload nginx

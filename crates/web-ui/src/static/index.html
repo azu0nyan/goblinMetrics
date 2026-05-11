@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<base href="./"/>
 <title>GoblinMetrics</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
@@ -148,14 +149,24 @@ tr:hover td{background:#1e2235}
       </div>
     </div>
 
-    <!-- Top URLs table -->
-    <div class="table-card">
-      <div class="card-head"><h3>Top URLs</h3></div>
-      <table id="url-table">
-        <thead><tr><th>URL</th><th>Requests</th></tr></thead>
-        <tbody><tr><td colspan="2" class="loading">Loading…</td></tr></tbody>
-      </table>
-      <button class="show-btn" id="url-toggle" style="display:none">Show all</button>
+    <!-- Top URLs + Top IPs tables -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:.75rem;margin-top:.75rem">
+      <div class="table-card" style="margin-top:0">
+        <div class="card-head"><h3>Top URLs</h3></div>
+        <table id="url-table">
+          <thead><tr><th>URL</th><th>Requests</th></tr></thead>
+          <tbody><tr><td colspan="2" class="loading">Loading…</td></tr></tbody>
+        </table>
+        <button class="show-btn" id="url-toggle" style="display:none">Show all</button>
+      </div>
+      <div class="table-card" style="margin-top:0">
+        <div class="card-head"><h3>Top IPs</h3></div>
+        <table id="ip-table">
+          <thead><tr><th>IP</th><th>Requests</th></tr></thead>
+          <tbody><tr><td colspan="2" class="loading">Loading…</td></tr></tbody>
+        </table>
+        <button class="show-btn" id="ip-toggle" style="display:none">Show all</button>
+      </div>
     </div>
   </div>
 </main>
@@ -187,6 +198,8 @@ const TICK = {color:'#64748b',font:{size:10}};
 let range = { from: null, to: null, hours: 1 };
 let cachedTopUrls = [];
 let showAllUrls = false;
+let cachedTopIps = [];
+let showAllIps = false;
 let reqType    = localStorage.getItem('goblin-req-type')    || 'bar';
 let statusType = localStorage.getItem('goblin-status-type') || 'bar';
 
@@ -331,7 +344,7 @@ async function fetchJSON(url) {
   const ms = performance.now() - start;
   const endpoint = url.split('?')[0];
   if (!apiTimings[endpoint]) apiTimings[endpoint] = [];
-  apiTimings[endpoint].push({ ts: Date.now(), ms });
+  apiTimings[endpoint].push({ ts: Math.round(Date.now() / 1000) * 1000, ms });
   if (apiTimings[endpoint].length > MAX_TIMINGS_PER_ENDPOINT) apiTimings[endpoint].shift();
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
@@ -400,13 +413,13 @@ function buildApiLatencyDatasets() {
     apiTimings[ep].forEach(p => { map[p.ts] = p.ms; });
     const color = endpointColor(i);
     return {
-      label:           ep.replace('/api/', ''),
+      label:           ep.replace(/^\/?api\//, ''),
       data:            allTs.map(ts => map[ts] ?? null),
       borderColor:     color,
       backgroundColor: color.replace('.85)','.12)'),
       borderWidth: 1.5,
       pointRadius: 0,
-      spanGaps: false,
+      spanGaps: true,
     };
   });
   charts.apiLatency.update('none');
@@ -424,6 +437,20 @@ function renderUrls(rows) {
     `<tr><td>${escHtml(r.url)}</td><td>${r.count.toLocaleString()}</td></tr>`
   ).join('');
 }
+
+// ── Top IPs table ─────────────────────────────────────────────────────────────
+function renderIps(rows) {
+  const tbody = document.querySelector('#ip-table tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="2" class="loading">No data yet</td></tr>';
+    document.getElementById('ip-toggle').style.display = 'none';
+    return;
+  }
+  tbody.innerHTML = rows.map(r =>
+    `<tr><td>${escHtml(r.ip)}</td><td>${r.count.toLocaleString()}</td></tr>`
+  ).join('');
+}
+
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -434,14 +461,15 @@ async function refresh() {
   const bkt = document.getElementById('bucket-select').value;
 
   try {
-    const [cpu, mem, load, ts, stTs, tu, lat] = await Promise.all([
-      fetchJSON(`/api/metrics?name=cpu_usage_pct&${rp}`),
-      fetchJSON(`/api/metrics?name=memory_used_pct&${rp}`),
-      fetchJSON(`/api/metrics?name=load_avg_1m&${rp}`),
-      fetchJSON(`/api/requests/timeseries?${rp}&bucket=${bkt}`),
-      fetchJSON(`/api/requests/status_timeseries?${rp}&bucket=${bkt}`),
-      fetchJSON(`/api/requests/top_urls?${rp}&limit=10`),
-      fetchJSON(`/api/requests/latency?${rp}&bucket=${bkt}`),
+    const [cpu, mem, load, ts, stTs, tu, ti, lat] = await Promise.all([
+      fetchJSON(`api/metrics?name=cpu_usage_pct&${rp}`),
+      fetchJSON(`api/metrics?name=memory_used_pct&${rp}`),
+      fetchJSON(`api/metrics?name=load_avg_1m&${rp}`),
+      fetchJSON(`api/requests/timeseries?${rp}&bucket=${bkt}`),
+      fetchJSON(`api/requests/status_timeseries?${rp}&bucket=${bkt}`),
+      fetchJSON(`api/requests/top_urls?${rp}&limit=10`),
+      fetchJSON(`api/requests/top_ips?${rp}&limit=10`),
+      fetchJSON(`api/requests/latency?${rp}&bucket=${bkt}`),
     ]);
 
     updateLine(charts.cpu,  cpu);
@@ -472,6 +500,18 @@ async function refresh() {
         btn.style.display = 'block';
       } else {
         document.getElementById('url-toggle').style.display = 'none';
+      }
+    }
+
+    cachedTopIps = ti;
+    if (!showAllIps) {
+      renderIps(ti);
+      if (ti.length === 10) {
+        const btn = document.getElementById('ip-toggle');
+        btn.textContent = 'Show all';
+        btn.style.display = 'block';
+      } else {
+        document.getElementById('ip-toggle').style.display = 'none';
       }
     }
 
@@ -528,7 +568,7 @@ document.getElementById('host-select').addEventListener('change', () => {
 
 async function populateHosts() {
   try {
-    const hosts = await fetchJSON('/api/requests/hosts');
+    const hosts = await fetchJSON('api/requests/hosts');
     const sel   = document.getElementById('host-select');
     const saved = localStorage.getItem('goblin-host') || '';
     hosts.forEach(h => {
@@ -596,7 +636,7 @@ document.getElementById('url-toggle').addEventListener('click', async () => {
     showAllUrls = true;
     btn.textContent = 'Fetching…';
     try {
-      const all = await fetchJSON(`/api/requests/top_urls?${rangeParams()}&limit=0`);
+      const all = await fetchJSON(`api/requests/top_urls?${rangeParams()}&limit=0`);
       renderUrls(all);
       btn.textContent = `Show less (${cachedTopUrls.length})`;
     } catch(e) {
@@ -606,6 +646,27 @@ document.getElementById('url-toggle').addEventListener('click', async () => {
   } else {
     showAllUrls = false;
     renderUrls(cachedTopUrls);
+    btn.textContent = 'Show all';
+  }
+});
+
+// Show all / Show less IPs
+document.getElementById('ip-toggle').addEventListener('click', async () => {
+  const btn = document.getElementById('ip-toggle');
+  if (!showAllIps) {
+    showAllIps = true;
+    btn.textContent = 'Fetching…';
+    try {
+      const all = await fetchJSON(`api/requests/top_ips?${rangeParams()}&limit=0`);
+      renderIps(all);
+      btn.textContent = `Show less (${cachedTopIps.length})`;
+    } catch(e) {
+      btn.textContent = 'Show all';
+      showAllIps = false;
+    }
+  } else {
+    showAllIps = false;
+    renderIps(cachedTopIps);
     btn.textContent = 'Show all';
   }
 });
