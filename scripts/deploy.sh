@@ -131,4 +131,5 @@ echo "==> Service status:"
 ssh "$REMOTE" "systemctl status goblin-log-ingestor goblin-sys-metrics goblin-web-ui --no-pager -l || true"
 
 echo ""
-echo "==> Deploy complete. Dashboard: http://${DEPLOY_HOST}:4444"
+echo "==> Deploy complete. Dashboard: https://goblin.geno.su/goblin-metrics/"
+echo "    (web-ui binds 127.0.0.1:4444 — not publicly exposed; access via nginx or SSH tunnel)"

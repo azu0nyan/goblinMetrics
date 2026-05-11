@@ -7,7 +7,7 @@ Type=simple
 User=goblin-metrics
 Group=goblin-metrics
 Environment=DB_PATH=/var/lib/goblin-metrics/metrics.db
-Environment=BIND_ADDR=0.0.0.0:4444
+Environment=BIND_ADDR=127.0.0.1:4444
 Environment=RUST_LOG=web_ui=info
 ExecStart=/opt/goblin-metrics/web-ui
 Restart=always

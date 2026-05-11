@@ -13,9 +13,9 @@ Every task follows this sequence — no exceptions:
 ```bash
 # Typical verify after deploy
 ssh azu@144.31.17.0 "systemctl is-active goblin-log-ingestor goblin-sys-metrics goblin-web-ui"
-curl -s http://144.31.17.0:4444/health
-curl -s "http://144.31.17.0:4444/api/requests/top_ips?hours=1&limit=5"
-curl -s "http://144.31.17.0:4444/api/requests/latency?hours=1&bucket=minute"
+ssh azu@144.31.17.0 "curl -s http://127.0.0.1:4444/health"
+ssh azu@144.31.17.0 "curl -s 'http://127.0.0.1:4444/api/requests/top_ips?hours=1&limit=5'"
+ssh azu@144.31.17.0 "curl -s 'http://127.0.0.1:4444/api/requests/latency?hours=1&bucket=minute'"
 ```
 
 ---
@@ -28,7 +28,7 @@ Three Rust binaries in a Cargo workspace, deployed to `144.31.17.0` (Debian 13, 
 - Binaries: `/opt/goblin-metrics/`
 - Database: `/var/lib/goblin-metrics/metrics.db` (SQLite, WAL mode, `busy_timeout=5000`)
 - Service user: `goblin-metrics` (system user, no login shell, `adm` group for nginx log access)
-- Dashboard: `http://144.31.17.0:4444` and proxied at `goblin.geno.su/goblin-metrics/`
+- Dashboard: `goblin.geno.su/goblin-metrics/` (nginx proxy); web-ui binds on `127.0.0.1:4444` (not exposed publicly)
 
 ---
 
